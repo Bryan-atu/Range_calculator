@@ -31,12 +31,14 @@ jobs:
         with:
           name: test-results
           path: test_results.log
-
+          
       - name: Sign Executable for Traceability
         run: |
-          # Generate GPG key in non-interactive mode
-          gpg --batch --yes --pinentry-mode loopback --quick-generate-key "Test user <test@test.test>" default default never
+          # Create a GPG key configuration file
+          echo -e "Key-Type: RSA\nKey-Length: 2048\nName-Real: Test User\nName-Email: test@test.com\nExpire-Date: 0\n%no-protection\n%commit\n" > /tmp/gpg-key.conf
+          gpg --batch --yes --pinentry-mode loopback --gen-key /tmp/gpg-key.conf
           gpg --output range_test.sig --detach-sig range_test
+
           echo "Signature Created"
 
       - name: Upload Signed Build Artifact
