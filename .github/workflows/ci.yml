@@ -1,0 +1,45 @@
+name: CI Pipeline for Aviation Software
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+    
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      - name: Install Build Tools
+        run: sudo apt-get update && sudo apt-get install -y gcc make
+
+      - name: Compile Code
+        run: gcc range_calculator.c test_range_calculator.c -o range_test -Wall -Wextra
+
+      - name: Run Tests
+        run: ./range_test | tee test_results.log
+      
+      - name: Check for Test Failures
+        run: grep "Assertion" test_results.log && exit 1 || echo "All tests passed"
+
+      - name: Store Test Logs as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test_results.log
+
+      - name: Sign Executable for Traceability
+        run: |
+          gpg --batch --yes --quick-generate-key "Test user" default default never
+          gpg --output range_test.sig --detach-sig range_test
+          echo "Signature Created"
+
+      - name: Upload Signed Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-build
+          path: range_test.sig
