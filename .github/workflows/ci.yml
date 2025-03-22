@@ -34,7 +34,7 @@ jobs:
 
       - name: Sign Executable for Traceability
         run: |
-          gpg --batch --yes --quick-generate-key "Test user" default default never
+          gpg --batch --yes --quick-generate-key "aviation-software-ci <ci@traceability.com>" default default never
           gpg --output range_test.sig --detach-sig range_test
           echo "Signature Created"
 
