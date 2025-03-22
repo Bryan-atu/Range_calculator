@@ -34,7 +34,8 @@ jobs:
 
       - name: Sign Executable for Traceability
         run: |
-          gpg --batch --yes --no-use-agent --quick-generate-key "Test user <test@test.test>" default default never
+          # Generate GPG key in non-interactive mode
+          gpg --batch --yes --pinentry-mode loopback --quick-generate-key "Test user <test@test.test>" default default never
           gpg --output range_test.sig --detach-sig range_test
           echo "Signature Created"
 
