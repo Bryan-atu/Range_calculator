@@ -67,19 +67,12 @@ jobs:
             range_test.sig
             range_test.pem
 
-      - name: Verify signature using Cosign + check Rekor enry
+      - name: Verify signature using Cosign + check Rekor entry
+        id: verify_signature
         run: |
           # Get the SHA256 hash of the artifact
           ARTIFACT_SHA256=$(sha256sum range_test | awk '{print $1}')
-          
-          # Get Rekor entry details
-          #REKOR_ENTRY=$(cosign verify-blob range_test \
-          #  --signature=range_test.sig \
-          #  --certificate=range_test.pem \
-          #  --certificate-identity-regexp="^https://github.com/${{ github.repository }}/.*" \
-          #  --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
-          #  --rekor-url=https://rekor.sigstore.dev)
-          
+  
           # Get Rekor entry UUID
           REKOR_ENTRY=$(cosign verify-blob range_test \
             --signature=range_test.sig \
@@ -120,7 +113,7 @@ jobs:
           echo "Verification Status:" >> traceability_report.txt
           echo "-------------------" >> traceability_report.txt
           echo "Code Signing: PASS" >> traceability_report.txt
-          echo "Rekor Log Entry: ${{ steps.verify.outputs.rekor_entry }}" >> traceability_report.txt
+          echo "Rekor Log Entry: ${{ steps.verify_signature.outputs.rekor_entry }}" >> traceability_report.txt
           echo "" >> traceability_report.txt
           
           echo "Test Summary:" >> traceability_report.txt
