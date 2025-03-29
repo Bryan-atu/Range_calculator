@@ -1,0 +1,50 @@
+name: CI Pipeline for Aviation Software
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+    
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y gcc make
+
+      - name: Compile code
+        run: gcc range_calculator.c test_range_calculator.c -o range_test -Wall -Wextra
+
+      - name: Run tests
+        run: ./range_test | tee test_results.log
+
+      - name: Check for test failures
+        run: grep "Assertion" test_results.log && exit 1 || echo "All tests passed"
+
+      - name: Store test logs as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test_results.log
+          
+      - name: Install Cosign/Sigstore
+        run: |
+          curl -LO https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64
+          chmod +x cosign-linux-amd64
+          sudo mv cosign-linux-amd64 /usr/local/bin/cosign
+
+      - name: Sign executable with cosign
+        run: |
+          cosign sign-blob --yes --output-signature range_test.sig range_test
+          echo "Signature created"
+
+      - name: Upload signed build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-build
+          path: range_test.sig
