@@ -1,4 +1,4 @@
-name: CI Pipeline for Aviation Software
+name: CI pipeline for aviation software
 
 on:
   push:
@@ -6,12 +6,16 @@ on:
       - main
   pull_request:
 
+permissions:
+  id-token: write  # Required for OIDC-based authentication
+  contents: read
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
     steps:
     
-      - name: Checkout Repository
+      - name: Checkout repo
         uses: actions/checkout@v4
 
       - name: Install build tools
@@ -38,13 +42,37 @@ jobs:
           chmod +x cosign-linux-amd64
           sudo mv cosign-linux-amd64 /usr/local/bin/cosign
 
-      - name: Sign executable with cosign
+      - name: Sign executable with cosign (OIDC)
+        env:
+          COSIGN_EXPERIMENTAL: "true"
         run: |
-          cosign sign-blob --yes --output-signature range_test.sig range_test
-          echo "Signature created"
+          cosign sign-blob --yes --output-signature range_test.sig --output-bundle range_test.bundle range_test \
+            --oidc-client-id sigstore
 
-      - name: Upload signed build artifact
+      - name: Upload signed build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: signed-build
-          path: range_test.sig
+          path: |
+            range_test.sig
+            range_test.bundle
+
+      - name: Verify signature with Cosign
+        run: |
+          cosign verify-blob --signature range_test.sig range_test
+          echo "Signature Verified Successfully"
+
+      - name: Generate traceability report
+        run: |
+          echo "Traceability Report - Aviation Software Build" > traceability_report.txt
+          echo "Build Timestamp: $(date)" >> traceability_report.txt
+          echo "Commit SHA: ${{ github.sha }}" >> traceability_report.txt
+          echo "GitHub Actor: ${{ github.actor }}" >> traceability_report.txt
+          echo "Verification Status: PASS" >> traceability_report.txt
+          echo "Rekor Log Entry: $(cat range_test.bundle)" >> traceability_report.txt
+
+      - name: Upload traceability report
+        uses: actions/upload-artifact@v4
+        with:
+          name: traceability-report
+          path: traceability_report.txt
