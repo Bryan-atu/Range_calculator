@@ -72,11 +72,11 @@ jobs:
           --certificate=range_test.pem \
           --certificate-identity-regexp="^https://github.com/.*" \
           --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
-          --rekor-url=https://rekor.sigstore.dev \
-          --output=json | jq -r '.RekorEntryUUID')
+          --rekor-url=https://rekor.sigstore.dev)
           
           # Print the UUID
-          echo "Rekor Entry UUID: $REKOR_UUID"
+          UUID=$(echo "$REKOR_UUID" | grep -oP 'Rekor Entry UUID: \K[0-9a-f]+')
+          echo "Rekor Entry UUID: $UUID"
           
           #Fetch full Rekor entry details
-          cosign rekor get --uuid "$REKOR_UUID" --rekor-url https://rekor.sigstore.dev
+          cosign rekor get --uuid "$UUID" --rekor-url https://rekor.sigstore.dev
