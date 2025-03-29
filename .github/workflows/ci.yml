@@ -51,7 +51,8 @@ jobs:
 
       - name: Retrieve Rekor log entry
         run: |
-          rekor-cli search --artifact range_test.sig > rekor_log_entry.txt
+          cosign verify-blob --signature range_test.sig range_test > verification_output.txt
+          grep "tlog index" verification_output.txt > rekor_log_entry.txt
           echo "Rekor Log Entry Recorded"
 
       - name: Upload signed build artifacts
