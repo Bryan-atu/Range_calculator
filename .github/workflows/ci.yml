@@ -49,9 +49,9 @@ jobs:
           cosign sign-blob --yes --output-signature range_test.sig range_test \
           --oidc-client-id sigstore
 
-      - name: Retrieve Rekor Log Entry
+      - name: Retrieve Rekor log entry
         run: |
-          cosign triangulate range_test > rekor_log_entry.txt
+          rekor-cli search --artifact range_test.sig > rekor_log_entry.txt
           echo "Rekor Log Entry Recorded"
 
       - name: Upload signed build artifacts
