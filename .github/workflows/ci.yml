@@ -6,6 +6,10 @@ on:
       - main
   pull_request:
 
+permissions:
+  id-token: write 
+  contents: read 
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
@@ -38,13 +42,30 @@ jobs:
           chmod +x cosign-linux-amd64
           sudo mv cosign-linux-amd64 /usr/local/bin/cosign
 
-      - name: Sign executable with cosign
+      - name: Sign executable with cosign (OIDC)
+        env:
+          COSIGN_EXPERIMENTAL: "true"
         run: |
-          cosign sign-blob --yes --output-signature range_test.sig range_test
-          echo "Signature created"
+          cosign sign-blob --yes --output-signature range_test.sig \
+            --output-certificate range_test.cert range_test \
+            --oidc-client-id sigstore
 
-      - name: Upload signed build artifact
+      - name: Upload signed build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: signed-build
-          path: range_test.sig
+          path: |
+            range_test.sig
+            range_test.cert  # Upload the signed artifacts and certificate
+
+      #- name: Verify signature using Cosign
+      #  run: |
+      #    cosign verify-blob range_test.sig \
+      #      --signature range_test.sig \
+      #      --certificate range_test.cert \
+      #      --certificate-identity "sigstore" \
+      #      --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+
+      #- name: Check Rekor log entry for signature
+      #  run: |
+      #    cosign rekor search --artifact range_test
