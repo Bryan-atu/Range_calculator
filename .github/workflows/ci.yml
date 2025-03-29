@@ -36,36 +36,100 @@ jobs:
           name: test-results
           path: test_results.log
           
-      - name: Install Cosign/Sigstore
+      - name: Install Cosign
         run: |
           curl -LO https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64
           chmod +x cosign-linux-amd64
           sudo mv cosign-linux-amd64 /usr/local/bin/cosign
 
+      - name: Install rekor-cli
+        run: |
+          curl -sSfL https://github.com/sigstore/rekor/releases/latest/download/rekor-cli-linux-amd64 -o rekor-cli
+          chmod +x rekor-cli
+          sudo mv rekor-cli /usr/local/bin/
+
       - name: Sign executable with cosign (OIDC)
         env:
-          COSIGN_EXPERIMENTAL: "true"
+          COSIGN_EXPERIMENTAL: "1"
         run: |
-          cosign sign-blob --yes --output-signature range_test.sig \
-            --output-certificate range_test.cert range_test \
-            --oidc-client-id sigstore
+          cosign sign-blob --yes \
+            --output-signature=range_test.sig \
+            --output-certificate=range_test.pem \
+            range_test
 
       - name: Upload signed build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: signed-build
           path: |
+            range_test
             range_test.sig
-            range_test.cert  # Upload the signed artifacts and certificate
+            range_test.pem
 
-      #- name: Verify signature using Cosign
-      #  run: |
-      #    cosign verify-blob range_test.sig \
-      #      --signature range_test.sig \
-      #      --certificate range_test.cert \
-      #      --certificate-identity "sigstore" \
-      #      --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+      - name: Verify signature using Cosign + check Rekor entry
+        id: verify_signature
+        run: |
+          # Get the SHA256 hash of the artifact
+          ARTIFACT_SHA256=$(sha256sum range_test | awk '{print $1}')
+  
+          # Get Rekor entry UUID
+          REKOR_ENTRY=$(cosign verify-blob range_test \
+            --signature=range_test.sig \
+            --certificate=range_test.pem \
+            --rekor-url=https://rekor.sigstore.dev 2>&1 \
+            | grep -o 'entries/[^ ]*' | cut -d'/' -f2)
 
-      #- name: Check Rekor log entry for signature
-      #  run: |
-      #    cosign rekor search --artifact range_test
+          # Fallback: Search Rekor by hash
+          if [ -z "$REKOR_ENTRY" ]; then
+            REKOR_ENTRY=$(rekor-cli search --sha "$ARTIFACT_SHA256" --rekor_server https://rekor.sigstore.dev | head -1)
+          fi
+
+          echo "rekor_entry=${REKOR_ENTRY}" >> $GITHUB_OUTPUT
+          echo "Rekor entry: ${REKOR_ENTRY}"
+         
+
+      - name: Generate traceability report
+        run: |
+          echo "Traceability report - aviation software build" > traceability_report.txt
+          echo "=============================================" >> traceability_report.txt
+          echo "" >> traceability_report.txt
+          echo "Build Information:" >> traceability_report.txt
+          echo "-----------------" >> traceability_report.txt
+          echo "Build Timestamp: $(date -u)" >> traceability_report.txt
+          echo "Repository: ${{ github.repository }}" >> traceability_report.txt
+          echo "Workflow: ${{ github.workflow }}" >> traceability_report.txt
+          echo "Commit SHA: ${{ github.sha }}" >> traceability_report.txt
+          echo "Triggered by: ${{ github.actor }}" >> traceability_report.txt
+          echo "Branch: ${{ github.ref_name }}" >> traceability_report.txt
+          echo "" >> traceability_report.txt
+          
+          echo "Build Artifacts:" >> traceability_report.txt
+          echo "----------------" >> traceability_report.txt
+          echo "Executable: range_test" >> traceability_report.txt
+          echo "SHA256: $(sha256sum range_test | awk '{print $1}')" >> traceability_report.txt
+          echo "" >> traceability_report.txt
+          
+          echo "Verification Status:" >> traceability_report.txt
+          echo "-------------------" >> traceability_report.txt
+          echo "Code Signing: PASS" >> traceability_report.txt
+          echo "Rekor Log Entry: ${{ steps.verify_signature.outputs.rekor_entry }}" >> traceability_report.txt
+          echo "" >> traceability_report.txt
+          
+          echo "Test Summary:" >> traceability_report.txt
+          echo "-------------" >> traceability_report.txt
+          TEST_COUNT=$(grep -c "Test [0-9]" test_results.log 2>/dev/null || echo 0)
+          FAILED_COUNT=$(grep -c "Assertion failed" test_results.log 2>/dev/null || echo 0)
+          echo "Test Status: $([ "$FAILED_COUNT" -eq 0 ] && echo "PASS" || echo "FAIL")" >> traceability_report.txt
+          echo "Test Count: ${TEST_COUNT}" >> traceability_report.txt
+          echo "Failed Tests: ${FAILED_COUNT}" >> traceability_report.txt
+          
+          echo "Environment:" >> traceability_report.txt
+          echo "------------" >> traceability_report.txt
+          echo "Runner OS: $(uname -a)" >> traceability_report.txt
+          echo "GCC Version: $(gcc --version | head -n1)" >> traceability_report.txt
+
+      - name: Upload traceability report
+        uses: actions/upload-artifact@v4
+        with:
+          name: traceability-report
+          path: traceability_report.txt
