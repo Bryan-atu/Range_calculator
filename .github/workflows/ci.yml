@@ -65,7 +65,6 @@ jobs:
         run: |
           # Get the SHA256 hash of the artifact
           ARTIFACT_SHA256=$(sha256sum range_test | awk '{print $1}')
-          echo $ARTIFACT_SHA256
           
           # Verify signature + check Rekor entry
           cosign verify-blob range_test \
@@ -73,7 +72,8 @@ jobs:
             --certificate=range_test.pem \
             --certificate-identity-regexp="^https://github.com/.*" \
             --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
-            --rekor-url=https://rekor.sigstore.dev
+            --rekor-url=https://rekor.sigstore.dev\
+            --verbose
 
           echo "Complete"
      
