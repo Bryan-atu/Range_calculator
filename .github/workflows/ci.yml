@@ -75,8 +75,11 @@ jobs:
           --rekor-url=https://rekor.sigstore.dev)
           
           # Print the UUID
-          UUID=$(echo "$REKOR_UUID" | grep -oP 'Rekor Entry UUID: \K[0-9a-f]+')
+          echo $REKOR_UUID
+          UUID=$(echo "$REKOR_UUID" | grep -oP 'tlog entry verified with uuid: \K[0-9a-f]+')
           echo "Rekor Entry UUID: $UUID"
           
           #Fetch full Rekor entry details
-          cosign rekor get --uuid "$UUID" --rekor-url https://rekor.sigstore.dev
+          #cosign rekor get --uuid "$UUID" --rekor-url https://rekor.sigstore.dev
+          # Check Rekor entry via API
+          curl -s "https://rekor.sigstore.dev/api/v1/log/entries/$UUID" | jq .
