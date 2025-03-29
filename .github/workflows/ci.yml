@@ -68,3 +68,14 @@ jobs:
             --certificate=range_test.pem \
             --certificate-identity-regexp="^https://github.com/.*" \
             --certificate-oidc-issuer="https://token.actions.githubusercontent.com"
+    
+      - name: Check Rekor log entry for signature
+        run: |
+          # Get the SHA256 hash of the artifact (required for Rekor search)
+          ARTIFACT_SHA256=$(sha256sum range_test | awk '{print $1}')
+          
+          # Search Rekor for entries matching this artifact
+          cosign verify-blob range_test \
+          --signature=range_test.sig \
+          --certificate=range_test.pem \
+          --rekor-url=https://rekor.sigstore.dev
