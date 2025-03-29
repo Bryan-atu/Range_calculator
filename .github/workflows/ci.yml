@@ -46,8 +46,13 @@ jobs:
         env:
           COSIGN_EXPERIMENTAL: "true"
         run: |
-          cosign sign-blob --yes --output-signature range_test.sig --output-bundle range_test.bundle range_test \
-            --oidc-client-id sigstore
+          cosign sign-blob --yes --output-signature range_test.sig range_test \
+          --oidc-client-id sigstore
+
+      - name: Retrieve Rekor Log Entry
+        run: |
+          cosign triangulate range_test > rekor_log_entry.txt
+          echo "Rekor Log Entry Recorded"
 
       - name: Upload signed build artifacts
         uses: actions/upload-artifact@v4
@@ -55,7 +60,7 @@ jobs:
           name: signed-build
           path: |
             range_test.sig
-            range_test.bundle
+            rekor_log_entry.txt  # Upload Rekor log entry as well
 
       - name: Verify signature with Cosign
         run: |
@@ -69,8 +74,8 @@ jobs:
           echo "Commit SHA: ${{ github.sha }}" >> traceability_report.txt
           echo "GitHub Actor: ${{ github.actor }}" >> traceability_report.txt
           echo "Verification Status: PASS" >> traceability_report.txt
-          echo "Rekor Log Entry: $(cat range_test.bundle)" >> traceability_report.txt
-
+          echo "Rekor Log Entry: $(cat rekor_log_entry.txt)" >> traceability_report.txt
+          
       - name: Upload traceability report
         uses: actions/upload-artifact@v4
         with:
