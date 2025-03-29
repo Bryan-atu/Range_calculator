@@ -72,10 +72,10 @@ jobs:
             --certificate=range_test.pem \
             --certificate-identity-regexp="^https://github.com/${{ github.repository }}/.*" \
             --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
-            --rekor-url=https://rekor.sigstore.dev | grep "tlog entry" | awk '{print $3}')
+            --rekor-url=https://rekor.sigstore.dev)
           
           echo "rekor_entry=${REKOR_ENTRY}" >> $GITHUB_OUTPUT
-          echo "The output for the Rekor check is $REKOR_ENTRY"
+          echo "The output for the Rekor check is $REKOR_ENTRY / ${REKOR_ENTRY}"
 
       - name: Generate traceability report
         run: |
