@@ -51,7 +51,7 @@ jobs:
 
       - name: Sign executable with cosign (OIDC)
         env:
-          COSIGN_EXPERIMENTAL: "true"
+          COSIGN_EXPERIMENTAL: "1"
         run: |
           cosign sign-blob --yes \
             --output-signature=range_test.sig \
@@ -89,7 +89,7 @@ jobs:
 
           # Fallback: Search Rekor by hash
           if [ -z "$REKOR_ENTRY" ]; then
-            REKOR_ENTRY=$(rekor-cli search --artifact-hash "$ARTIFACT_SHA256" --rekor-url https://rekor.sigstore.dev | head -1)
+            REKOR_ENTRY=$(rekor-cli search --sha "$ARTIFACT_SHA256" --rekor-url https://rekor.sigstore.dev | head -1)
           fi
 
           echo "rekor_entry=${REKOR_ENTRY}" >> $GITHUB_OUTPUT
