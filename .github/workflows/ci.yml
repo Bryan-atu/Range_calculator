@@ -43,6 +43,12 @@ jobs:
           chmod +x cosign-linux-amd64
           sudo mv cosign-linux-amd64 /usr/local/bin/cosign
 
+      - name: Install rekor-cli
+        run: |
+          curl -sSfL https://github.com/sigstore/rekor/releases/latest/download/rekor-cli-linux-amd64 -o rekor-cli
+          chmod +x rekor-cli
+          sudo mv rekor-cli /usr/local/bin/
+
       - name: Sign executable with cosign (OIDC)
         env:
           COSIGN_EXPERIMENTAL: "true"
