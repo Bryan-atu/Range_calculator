@@ -61,7 +61,7 @@ jobs:
       - name: Verify signature with Cosign
         run: |
           cosign verify-blob --signature range_test.sig --certificate range_test.cert \
-            --certificate-identity "test@test.com" \
+            --certificate-identity "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}/users/${{ github.actor }}" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" range_test > verification_output.txt
           echo "Signature Verified Successfully"
 
