@@ -89,7 +89,7 @@ jobs:
 
           # Fallback: Search Rekor by hash
           if [ -z "$REKOR_ENTRY" ]; then
-            REKOR_ENTRY=$(rekor-cli search --sha "$ARTIFACT_SHA256" --rekor-url https://rekor.sigstore.dev | head -1)
+            REKOR_ENTRY=$(rekor-cli search --sha "$ARTIFACT_SHA256" --rekor_server https://rekor.sigstore.dev | head -1))
           fi
 
           echo "rekor_entry=${REKOR_ENTRY}" >> $GITHUB_OUTPUT
