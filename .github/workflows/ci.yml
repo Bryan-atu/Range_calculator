@@ -119,7 +119,8 @@ jobs:
           echo "Test Summary:" >> traceability_report.txt
           echo "-------------" >> traceability_report.txt
           echo "Test Status: $(grep -q "Assertion" test_results.log && echo "FAIL" || echo "PASS")" >> traceability_report.txt
-          echo "Test Count: $(grep -c "Assertion" test_results.log || echo 0)" >> traceability_report.txt
+          echo "Test Count: $(grep -c "Test [0-9]" test_results.log || echo 0)" >> traceability_report.txt
+          echo "Failed Tests: $(grep -c "Assertion failed" test_results.log || echo 0)" >> traceability_report.txt
           echo "" >> traceability_report.txt
           
           echo "Environment:" >> traceability_report.txt
