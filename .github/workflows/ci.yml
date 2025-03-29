@@ -60,7 +60,8 @@ jobs:
 
       - name: Verify signature with Cosign
         run: |
-          cosign verify-blob --signature range_test.sig --certificate range_test.cert range_test > verification_output.txt
+          cosign verify-blob --signature range_test.sig --certificate range_test.cert \
+            --certificate-identity "test@test.com" range_test > verification_output.txt
           echo "Signature Verified Successfully"
 
       - name: Retrieve Rekor log entry
