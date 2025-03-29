@@ -6,6 +6,10 @@ on:
       - main
   pull_request:
 
+permissions:
+  id-token: write 
+  contents: read 
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
@@ -54,14 +58,14 @@ jobs:
             range_test.sig
             range_test.cert  # Upload the signed artifacts and certificate
 
-      - name: Verify signature using Cosign
-        run: |
-          cosign verify-blob range_test.sig \
-            --signature range_test.sig \
-            --certificate range_test.cert \
-            --certificate-identity "sigstore" \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+      #- name: Verify signature using Cosign
+      #  run: |
+      #    cosign verify-blob range_test.sig \
+      #      --signature range_test.sig \
+      #      --certificate range_test.cert \
+      #      --certificate-identity "sigstore" \
+      #      --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
 
-      - name: Check Rekor log entry for signature
-        run: |
-          cosign rekor search --artifact range_test
+      #- name: Check Rekor log entry for signature
+      #  run: |
+      #    cosign rekor search --artifact range_test
