@@ -59,7 +59,8 @@ jobs:
           cosign verify-blob range_test.sig \
             --signature range_test.sig \
             --certificate range_test.cert \
-            --certificate-identity "sigstore"
+            --certificate-identity "sigstore" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
 
       - name: Check Rekor log entry for signature
         run: |
