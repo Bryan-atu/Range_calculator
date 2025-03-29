@@ -66,15 +66,19 @@ jobs:
           # Get the SHA256 hash of the artifact
           ARTIFACT_SHA256=$(sha256sum range_test | awk '{print $1}')
           
-          # Verify signature + check Rekor entry
-          cosign verify-blob range_test \
+          cosign verify-blob -d \  
             --signature=range_test.sig \
             --certificate=range_test.pem \
             --certificate-identity-regexp="^https://github.com/.*" \
             --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
-            --rekor-url=https://rekor.sigstore.dev\
-            --verbose
+            --rekor-url=https://rekor.sigstore.dev \
+            --verbose 2>&1 | tee cosign_verify_debug_log.txt  # Save full output
 
-          echo "Complete"
-     
-         
+          # Upload debug logs as an artifact
+          echo "Debug logs saved to cosign_verify_debug_log.txt"
+
+      - name: Upload debug logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: cosign-debug-logs
+          path: cosign_verify_debug_log.txt
