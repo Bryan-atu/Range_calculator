@@ -48,3 +48,11 @@ jobs:
         with:
           name: signed-build
           path: range_test.sig
+
+      - name: Verify signature using Cosign
+        run: |
+          cosign verify-blob range_test.sig --signature range_test.sig --certificate range_test.cert
+
+      - name: Check Rekor log entry for signature
+        run: |
+          cosign rekor search --artifact range_test
