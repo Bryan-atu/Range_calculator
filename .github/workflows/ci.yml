@@ -65,21 +65,47 @@ jobs:
           output-file: sbom.spdx.json
 
       - name: Add system dependencies
-        run: |
-          # Create an empty array first
-          echo '[]' > deps.json
-    
-          # Append each library as a proper JSON object to the array
-          ldd ./range_test | awk '/=>/ {print $1}' | sort -u | while read lib; do
-            jq --arg name "$lib" \
-               --arg spdxid "SPDXRef-Package-$lib" \
-               '. += [{"name":$name,"SPDXID":$spdxid,"versionInfo":"UNKNOWN","supplier":"NOASSERTION"}]' \
-               deps.json > deps-tmp.json && mv deps-tmp.json deps.json
-          done
-    
-          # Merge with existing SBOM
-          jq '.packages += $deps[0]' --slurpfile deps deps.json sbom.spdx.json > sbom-with-deps.spdx.json
+        uses: anchore/sbom-action@v0
+        with:
+          path: ./
+          format: spdx-json
+          output-file: sbom.spdx.json
+          args: --file-patterns='**/*.c' --file-patterns='**/*.h'  # Explicitly include C files
 
+      - name: Add dynamic libraries to SBOM
+        run: |
+          # Get library dependencies with version info
+          ldd ./range_test | awk '/=>/ {print $1}' | sort -u | while read lib; do
+            # Try to get package version
+            pkg=$(dpkg -S "$(readlink -f $(ldd ./range_test | grep "$lib" | awk '{print $3}')" 2>/dev/null | cut -d: -f1 || echo "$lib")
+            version=$(dpkg -s "$pkg" 2>/dev/null | grep Version | cut -d: -f2 | tr -d ' ' || echo "UNKNOWN")
+            
+            echo "Processing: $lib (Package: $pkg, Version: $version)"
+            
+            # Generate SPDX entry
+            jq --arg name "$lib" \
+               --arg spdxid "SPDXRef-Package-$(echo "$lib" | tr './' '__')" \
+               --arg version "$version" \
+               --arg purl "pkg:deb/$pkg@$version" \
+               '.packages += [{
+                 "name": $name,
+                 "SPDXID": $spdxid,
+                 "versionInfo": $version,
+                 "supplier": "NOASSERTION",
+                 "downloadLocation": "NOASSERTION",
+                 "filesAnalyzed": false,
+                 "externalRefs": [{
+                   "referenceCategory": "PACKAGE-MANAGER",
+                   "referenceType": "purl",
+                   "referenceLocator": $purl
+                 }]
+               }]' sbom.spdx.json > sbom-tmp.json && mv sbom-tmp.json sbom.spdx.json
+          done
+
+          # Verify output
+          echo "SBOM now contains these packages:"
+          jq '.packages[] | select(.name | startswith("lib"))' sbom.spdx.json
+      
       - name: Attest SBOM
         env:
           COSIGN_EXPERIMENTAL: "1"
