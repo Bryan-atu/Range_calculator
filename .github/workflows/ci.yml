@@ -98,7 +98,7 @@ jobs:
             range_test
             range_test.sig
             range_test.pem
-            sbom.spdx.json
+            sbom-with-deps.spdx.json
 
       - name: Verify signature using Cosign + check Rekor entry
         id: verify_signature
