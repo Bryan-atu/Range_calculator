@@ -71,8 +71,9 @@ jobs:
           cosign attest-blob \
           --yes \
           --predicate sbom.spdx.json \
-          --type spdxjson \
-          range_test
+          --type spdxjson
+
+          jq '.files' sbom.spdx.json
 
       - name: Upload signed build artifacts
         uses: actions/upload-artifact@v4
