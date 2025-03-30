@@ -73,37 +73,39 @@ jobs:
 
       - name: Add dynamic libraries to SBOM
         run: |
-          # Get library dependencies with version info
+          # Create temp file for libraries
+          echo '[]' > deps.json
+          
+          # Process each library
           ldd ./range_test | awk '/=>/ {print $1}' | sort -u | while read lib; do
-            # Try to get package version
-            pkg=$(dpkg -S "$(readlink -f $(ldd ./range_test | grep "$lib" | awk '{print $3}')" 2>/dev/null | cut -d: -f1 || echo "$lib")
-            version=$(dpkg -s "$pkg" 2>/dev/null | grep Version | cut -d: -f2 | tr -d ' ' || echo "UNKNOWN")
+            # Get package info
+            pkg=$(dpkg -S "$(ldd ./range_test | grep "$lib" | awk '{print $3}") 2>/dev/null | cut -d: -f1 || echo "$lib")
+            version=$(dpkg -s "$pkg" 2>/dev/null | grep Version | awk '{print $2}' || echo "UNKNOWN")
             
-            echo "Processing: $lib (Package: $pkg, Version: $version)"
-            
-            # Generate SPDX entry
+            # Add to temp file
             jq --arg name "$lib" \
-               --arg spdxid "SPDXRef-Package-$(echo "$lib" | tr './' '__')" \
+               --arg pkg "$pkg" \
                --arg version "$version" \
-               --arg purl "pkg:deb/$pkg@$version" \
-               '.packages += [{
+               '. += [{
                  "name": $name,
-                 "SPDXID": $spdxid,
+                 "SPDXID": ("SPDXRef-Package-" + ($name | gsub("[./]"; "_"))),
                  "versionInfo": $version,
                  "supplier": "NOASSERTION",
-                 "downloadLocation": "NOASSERTION",
-                 "filesAnalyzed": false,
                  "externalRefs": [{
                    "referenceCategory": "PACKAGE-MANAGER",
                    "referenceType": "purl",
-                   "referenceLocator": $purl
+                   "referenceLocator": ("pkg:deb/" + $pkg + "@" + $version)
                  }]
-               }]' sbom.spdx.json > sbom-tmp.json && mv sbom-tmp.json sbom.spdx.json
+               }]' deps.json > deps-tmp.json && mv deps-tmp.json deps.json
           done
-
-          # Verify output
-          echo "SBOM now contains these packages:"
-          jq '.packages[] | select(.name | startswith("lib"))' sbom.spdx.json
+      
+          # Merge with main SBOM
+          jq '.packages += input' sbom.spdx.json deps.json > sbom-final.spdx.json
+          
+          # Verify
+          echo "Added these libraries:"
+          jq '.packages[-5:]' sbom-final.spdx.json
+          
       
       - name: Attest SBOM
         env:
