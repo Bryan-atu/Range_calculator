@@ -63,7 +63,13 @@ jobs:
           path: ./
           format: spdx-json
           output-file: sbom.spdx.json
-          args: --file-patterns='**/*.c' --file-patterns='**/*.h'
+
+      - name: Add system dependencies
+        run: |
+          ldd ./range_test | awk '/=>/ {print $1}' | sort -u | while read lib; do
+            echo "{\"name\":\"$lib\",\"SPDXID\":\"SPDXRef-Package-$lib\"}" >> deps.json
+          done
+          jq '.packages += inputs' sbom.spdx.json deps.json > sbom-with-deps.spdx.json
 
       - name: Attest SBOM
         env:
@@ -71,7 +77,7 @@ jobs:
         run: |
           cosign attest-blob \
           --yes \
-          --predicate sbom.spdx.json \
+          --predicate sbom-with-deps.spdx.json \
           --type spdxjson \
           range_test
 
