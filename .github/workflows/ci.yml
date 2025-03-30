@@ -66,10 +66,19 @@ jobs:
 
       - name: Add system dependencies
         run: |
+          # Create an empty array first
+          echo '[]' > deps.json
+    
+          # Append each library as a proper JSON object to the array
           ldd ./range_test | awk '/=>/ {print $1}' | sort -u | while read lib; do
-            echo "{\"name\":\"$lib\",\"SPDXID\":\"SPDXRef-Package-$lib\"}" >> deps.json
+            jq --arg name "$lib" \
+               --arg spdxid "SPDXRef-Package-$lib" \
+               '. += [{"name":$name,"SPDXID":$spdxid,"versionInfo":"UNKNOWN","supplier":"NOASSERTION"}]' \
+               deps.json > deps-tmp.json && mv deps-tmp.json deps.json
           done
-          jq '.packages += inputs' sbom.spdx.json deps.json > sbom-with-deps.spdx.json
+    
+          # Merge with existing SBOM
+          jq '.packages += $deps[0]' --slurpfile deps deps.json sbom.spdx.json > sbom-with-deps.spdx.json
 
       - name: Attest SBOM
         env:
