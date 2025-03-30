@@ -86,9 +86,16 @@ jobs:
           echo "Generated dynamic SBOM:"
           cat dynamic_sbom.json
 
-          jq '.files += input.files' sbom.spdx.json dynamic_sbom.json > merged_sbom.json
-          mv merged_sbom.json sbom.spdx.json
-    
+          jq --slurpfile dyn dynamic_sbom.json '
+          .files = (.files + $dyn[0].files) |
+          .packages += [{
+            SPDXID: $dyn[0].SPDXID,
+            name: $dyn[0].name,
+            filesAnalyzed: $dyn[0].filesAnalyzed,
+            files: $dyn[0].files
+          }]
+          ' sbom.spdx.json > merged_sbom.json && mv merged_sbom.json sbom.spdx.json
+        
       - name: Attest SBOM
         env:
           COSIGN_EXPERIMENTAL: "1"
