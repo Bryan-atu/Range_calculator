@@ -85,6 +85,10 @@ jobs:
           # Debug output
           echo "Generated dynamic SBOM:"
           cat dynamic_sbom.json
+
+          jq '.' sbom.spdx.json | less
+
+          jq 'keys' sbom.spdx.json
           
           # Merge into SPDX SBOM correctly
           jq '.files += (input.files // [])' sbom.spdx.json dynamic_sbom.json > merged_sbom.json
