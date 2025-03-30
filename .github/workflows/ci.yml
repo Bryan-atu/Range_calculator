@@ -57,12 +57,13 @@ jobs:
             --output-certificate=range_test.pem \
             range_test
       
-      - name: Generate SBOM (application)
+      - name: Generate SBOM
         uses: anchore/sbom-action@v0
         with:
-          path: ./range_calculator.c ./range_calculator.h ./test_range_calculator.c
+          path: ./
           format: spdx-json
           output-file: sbom.spdx.json
+          args: --file-patterns='**/*.c' --file-patterns='**/*.h'
 
       - name: Attest SBOM
         env:
