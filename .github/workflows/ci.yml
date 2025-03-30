@@ -73,16 +73,21 @@ jobs:
 
       - name: Add dynamic libraries to SBOM
         run: |
+          # Extract dynamic libraries
           ldd range_test | awk '{print $1}' | grep -v '(' | sort -u > dynamic_libs.txt
-    
+          
+          # Generate dynamic libraries SBOM JSON
           echo '{ "SPDXID": "SPDXRef-DynamicLibraries", "name": "Dynamic Libraries", "filesAnalyzed": true, "files": [' > dynamic_sbom.json
           cat dynamic_libs.txt | awk '{print "{ \"fileName\": \"" $1 "\" },"}' >> dynamic_sbom.json
           sed -i '$ s/,$//' dynamic_sbom.json
           echo ']}' >> dynamic_sbom.json
-    
-          cat dynamic_sbom.json  # Debug output
-    
-          jq -s '.[0].files += .[1].files | .[0]' sbom.spdx.json dynamic_sbom.json > merged_sbom.json
+          
+          # Debug output
+          echo "Generated dynamic SBOM:"
+          cat dynamic_sbom.json
+          
+          # Merge into SPDX SBOM correctly
+          jq '.files += (input.files // [])' sbom.spdx.json dynamic_sbom.json > merged_sbom.json
           mv merged_sbom.json sbom.spdx.json
     
       - name: Attest SBOM
