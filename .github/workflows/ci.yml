@@ -65,11 +65,12 @@ jobs:
           output-file: sbom.spdx.json
 
       - name: Attest SBOM
+        env:
+          COSIGN_EXPERIMENTAL: "1"
         run: |
-          COSIGN_EXPERIMENTAL=1 cosign attest \
+          cosign attest-blob \
           --predicate sbom.spdx.json \
           --type spdxjson \
-          --yes \
           range_test
 
       - name: Upload signed build artifacts
