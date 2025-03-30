@@ -56,6 +56,23 @@ jobs:
             --output-signature=range_test.sig \
             --output-certificate=range_test.pem \
             range_test
+      
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: ./
+          format: spdx-json
+          output-file: sbom.spdx.json
+        
+      - name: Attest SBOM
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cosign attest-blob \
+          --yes \
+          --predicate sbom.spdx.json \
+          --type spdxjson \
+          range_test
 
       - name: Upload signed build artifacts
         uses: actions/upload-artifact@v4
@@ -65,6 +82,7 @@ jobs:
             range_test
             range_test.sig
             range_test.pem
+            sbom.spdx.json
 
       - name: Verify signature using Cosign + check Rekor entry
         id: verify_signature
