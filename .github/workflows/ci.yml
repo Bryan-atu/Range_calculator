@@ -69,6 +69,7 @@ jobs:
           COSIGN_EXPERIMENTAL: "1"
         run: |
           cosign attest-blob \
+          --yes \
           --predicate sbom.spdx.json \
           --type spdxjson \
           range_test
