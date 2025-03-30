@@ -63,38 +63,6 @@ jobs:
           path: ./
           format: spdx-json
           output-file: sbom.spdx.json
-
-      - name: Add system dependencies
-        uses: anchore/sbom-action@v0
-        with:
-          path: ./
-          format: spdx-json
-          output-file: sbom.spdx.json
-
-      - name: Add dynamic libraries to SBOM
-        run: |
-          # Extract dynamic libraries
-          ldd range_test | awk '{print $1}' | grep -v '(' | sort -u > dynamic_libs.txt
-          
-          # Generate dynamic libraries SBOM JSON
-          echo '{ "SPDXID": "SPDXRef-DynamicLibraries", "name": "Dynamic Libraries", "filesAnalyzed": true, "files": [' > dynamic_sbom.json
-          cat dynamic_libs.txt | awk '{print "{ \"fileName\": \"" $1 "\" },"}' >> dynamic_sbom.json
-          sed -i '$ s/,$//' dynamic_sbom.json
-          echo ']}' >> dynamic_sbom.json
-          
-          # Debug output
-          echo "Generated dynamic SBOM:"
-          cat dynamic_sbom.json
-
-          jq --slurpfile dyn dynamic_sbom.json '
-          .files = (.files + $dyn[0].files) |
-          .packages += [{
-            SPDXID: $dyn[0].SPDXID,
-            name: $dyn[0].name,
-            filesAnalyzed: $dyn[0].filesAnalyzed,
-            files: $dyn[0].files
-          }]
-          ' sbom.spdx.json > merged_sbom.json && mv merged_sbom.json sbom.spdx.json
         
       - name: Attest SBOM
         env:
