@@ -70,7 +70,6 @@ jobs:
           path: ./
           format: spdx-json
           output-file: sbom.spdx.json
-          args: --file-patterns='**/*.c' --file-patterns='**/*.h'  # Explicitly include C files
 
       - name: Add dynamic libraries to SBOM
         run: |
@@ -112,7 +111,7 @@ jobs:
         run: |
           cosign attest-blob \
           --yes \
-          --predicate sbom-with-deps.spdx.json \
+          --predicate sbom.spdx.json \
           --type spdxjson \
           range_test
 
@@ -124,7 +123,7 @@ jobs:
             range_test
             range_test.sig
             range_test.pem
-            sbom-with-deps.spdx.json
+            sbom.spdx.json
 
       - name: Verify signature using Cosign + check Rekor entry
         id: verify_signature
