@@ -73,40 +73,14 @@ jobs:
 
       - name: Add dynamic libraries to SBOM
         run: |
-          # Create temp file for libraries
-          echo '[]' > deps.json
-          
-          # Process each library
-          ldd ./range_test | awk '/=>/ {print $1}' | sort -u | while read lib; do
-            # Get package info
-            pkg=$(dpkg -S "$(ldd ./range_test | grep "$lib" | awk '{print $3}") 2>/dev/null | cut -d: -f1 || echo "$lib")
-            version=$(dpkg -s "$pkg" 2>/dev/null | grep Version | awk '{print $2}' || echo "UNKNOWN")
-            
-            # Add to temp file
-            jq --arg name "$lib" \
-               --arg pkg "$pkg" \
-               --arg version "$version" \
-               '. += [{
-                 "name": $name,
-                 "SPDXID": ("SPDXRef-Package-" + ($name | gsub("[./]"; "_"))),
-                 "versionInfo": $version,
-                 "supplier": "NOASSERTION",
-                 "externalRefs": [{
-                   "referenceCategory": "PACKAGE-MANAGER",
-                   "referenceType": "purl",
-                   "referenceLocator": ("pkg:deb/" + $pkg + "@" + $version)
-                 }]
-               }]' deps.json > deps-tmp.json && mv deps-tmp.json deps.json
-          done
-      
-          # Merge with main SBOM
-          jq '.packages += input' sbom.spdx.json deps.json > sbom-final.spdx.json
-          
-          # Verify
-          echo "Added these libraries:"
-          jq '.packages[-5:]' sbom-final.spdx.json
-          
-      
+            ldd range_test | awk '{print $1}' | grep -v '(' | sort -u > dynamic_libs.txt
+            echo '{ "SPDXID": "SPDXRef-DynamicLibraries", "name": "Dynamic Libraries", "filesAnalyzed": true, "file": [' > dynamic_sbom.json
+            cat dynamic_libs.txt | awk '{print "{ \"fileName\": \"" $1 "\" },"}' >> dynamic_sbom.json
+            sed -i '$ s/,$//' dynamic_sbom.json
+            echo ']}' >> dynamic_sbom.json
+            jq -s '.[0].files += .[1].file | .[0]' sbom.spdx.json dynamic_sbom.json > merged_sbom.json
+            mv merged_sbom.json sbom.spdx.json
+    
       - name: Attest SBOM
         env:
           COSIGN_EXPERIMENTAL: "1"
