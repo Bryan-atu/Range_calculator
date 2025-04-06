@@ -135,8 +135,14 @@ jobs:
           
           echo "Test Summary:" >> traceability_report.txt
           echo "-------------" >> traceability_report.txt
-          TEST_COUNT=$(grep -c "Test [0-9]" test_results.log 2>/dev/null || echo 0)
+
           FAILED_COUNT=$(grep -c "Assertion failed" test_results.log 2>/dev/null || echo 0)
+          TEST_STATUS="PASS"
+          if [ "$FAILED_COUNT" -ne 0 ]; then
+            TEST_STATUS="FAIL"
+          fi
+          echo "Test Status: ${TEST_STATUS}" >> traceability_report.txt
+          TEST_COUNT=$(grep -c "Test [0-9]" test_results.log 2>/dev/null || echo 0)
           echo "Test Status: $([ "$FAILED_COUNT" -eq 0 ] && echo "PASS" || echo "FAIL")" >> traceability_report.txt
           echo "Test Count: ${TEST_COUNT}" >> traceability_report.txt
           echo "Failed Tests: ${FAILED_COUNT}" >> traceability_report.txt
