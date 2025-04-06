@@ -143,7 +143,6 @@ jobs:
           fi
           echo "Test Status: ${TEST_STATUS}" >> traceability_report.txt
           TEST_COUNT=$(grep -c "Test [0-9]" test_results.log 2>/dev/null || echo 0)
-          echo "Test Status: $([ "$FAILED_COUNT" -eq 0 ] && echo "PASS" || echo "FAIL")" >> traceability_report.txt
           echo "Test Count: ${TEST_COUNT}" >> traceability_report.txt
           echo "Failed Tests: ${FAILED_COUNT}" >> traceability_report.txt
           
