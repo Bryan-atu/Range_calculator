@@ -1,7 +1,7 @@
 FROM ubuntu:24.04
 RUN apt-get update \
+ && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends ca-certificates \
- && apt-get purge -y --auto-remove gpgv \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
