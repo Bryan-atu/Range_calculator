@@ -3,18 +3,19 @@ name: CI Pipeline for Aviation Software
 on:
   push:
     branches:
-      - main
+      - feat/Range-8
   pull_request:
 
 permissions:
-  id-token: write 
-  contents: read 
+  id-token: write
+  contents: read
+  security-events: write
+  packages: write
 
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
     steps:
-    
       - name: Checkout Repository
         uses: actions/checkout@v4
 
@@ -31,85 +32,126 @@ jobs:
         run: grep "Assertion" test_results.log && exit 1 || echo "All tests passed"
 
       - name: Store test logs as artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-results
           path: test_results.log
-          
+
+      - name: Set image ref
+        run: |
+          echo "IMAGE=ghcr.io/${{ github.repository_owner }}/range-calculator:${{ github.sha }}" >> $GITHUB_ENV
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ env.IMAGE }}
+
+      - name: Trivy scan image (SARIF)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: image
+          image-ref: ${{ env.IMAGE }}
+          format: sarif
+          output: trivy-image.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: 0
+
+      - name: Upload Trivy SARIF to GitHub Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+
+      - name: Upload Trivy SARIF artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-image-sarif
+          path: trivy-image.sarif
+
+      - name: Trivy scan image (table, gate)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: image
+          image-ref: ${{ env.IMAGE }}
+          format: table
+          output: trivy-image.txt
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: 1
+
+      - name: Upload Trivy image report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-image-report
+          path: trivy-image.txt
+
       - name: Install Cosign
         run: |
           curl -LO https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64
           chmod +x cosign-linux-amd64
           sudo mv cosign-linux-amd64 /usr/local/bin/cosign
 
-      - name: Install rekor-cli
-        run: |
-          curl -sSfL https://github.com/sigstore/rekor/releases/latest/download/rekor-cli-linux-amd64 -o rekor-cli
-          chmod +x rekor-cli
-          sudo mv rekor-cli /usr/local/bin/
-
-      - name: Sign executable with cosign (OIDC)
+      - name: Sign image with cosign (OIDC)
         env:
           COSIGN_EXPERIMENTAL: "1"
         run: |
-          cosign sign-blob --yes \
-            --output-signature=range_test.sig \
-            --output-certificate=range_test.pem \
-            range_test
-      
-      - name: Generate SBOM
+          cosign sign --yes "${IMAGE}"
+
+      - name: Generate image SBOM
         uses: anchore/sbom-action@v0
         with:
-          path: ./
+          image: ${{ env.IMAGE }}
           format: spdx-json
-          output-file: sbom.spdx.json
-        
-      - name: Attest SBOM
+          output-file: image.sbom.spdx.json
+
+      - name: Upload image SBOM artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-sbom
+          path: image.sbom.spdx.json
+
+      - name: Attest image SBOM with cosign (OIDC)
         env:
           COSIGN_EXPERIMENTAL: "1"
         run: |
-          cosign attest-blob \
-          --yes \
-          --predicate sbom.spdx.json \
-          --type spdxjson \
-          range_test
+          cosign attest --yes \
+            --predicate image.sbom.spdx.json \
+            --type spdxjson \
+            "${IMAGE}"
 
-      - name: Upload signed build artifacts
+      - name: Upload build artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: signed-build
+          name: build-output
           path: |
             range_test
-            range_test.sig
-            range_test.pem
-            sbom.spdx.json
+            test_results.log
 
-      - name: Verify signature using Cosign + check Rekor entry
-        id: verify_signature
-        run: |
-          # Get the SHA256 hash of the artifact
-          ARTIFACT_SHA256=$(sha256sum range_test | awk '{print $1}')
-  
-          # Get Rekor entry UUID
-          REKOR_ENTRY=$(cosign verify-blob range_test \
-            --signature=range_test.sig \
-            --certificate=range_test.pem \
-            --rekor-url=https://rekor.sigstore.dev 2>&1 \
-            | grep -o 'entries/[^ ]*' | cut -d'/' -f2)
-
-          # Fallback: Search Rekor by hash
-          if [ -z "$REKOR_ENTRY" ]; then
-            REKOR_ENTRY=$(rekor-cli search --sha "$ARTIFACT_SHA256" --rekor_server https://rekor.sigstore.dev | head -1)
-          fi
-
-          echo "rekor_entry=${REKOR_ENTRY}" >> $GITHUB_OUTPUT
-          echo "Rekor entry: ${REKOR_ENTRY}"
-         
       - name: Generate traceability report
         run: |
           echo "Traceability report - aviation software build" > traceability_report.txt
           echo "=============================================" >> traceability_report.txt
           echo "" >> traceability_report.txt
+
           echo "Build Information:" >> traceability_report.txt
           echo "-----------------" >> traceability_report.txt
           echo "Build Timestamp: $(date -u)" >> traceability_report.txt
@@ -117,40 +159,45 @@ jobs:
           echo "Workflow: ${{ github.workflow }}" >> traceability_report.txt
           echo "Commit SHA: ${{ github.sha }}" >> traceability_report.txt
           echo "Triggered by: ${{ github.actor }}" >> traceability_report.txt
-          echo "Branch: ${{ github.ref_name }}" >> traceability_report.txt
+          echo "Branch/Ref: ${{ github.ref }}" >> traceability_report.txt
           echo "" >> traceability_report.txt
-          
-          echo "Build Artifacts:" >> traceability_report.txt
-          echo "----------------" >> traceability_report.txt
+
+          echo "Container Image:" >> traceability_report.txt
+          echo "---------------" >> traceability_report.txt
+          echo "Image: ${IMAGE}" >> traceability_report.txt
+          echo "" >> traceability_report.txt
+
+          echo "Binary Artifact:" >> traceability_report.txt
+          echo "--------------" >> traceability_report.txt
           echo "Executable: range_test" >> traceability_report.txt
           echo "SHA256: $(sha256sum range_test | awk '{print $1}')" >> traceability_report.txt
           echo "" >> traceability_report.txt
-          
-          echo "Verification Status:" >> traceability_report.txt
-          echo "-------------------" >> traceability_report.txt
-          echo "Code Signing: PASS" >> traceability_report.txt
-          echo "Rekor Log Entry: ${{ steps.verify_signature.outputs.rekor_entry }}" >> traceability_report.txt
+
+          echo "Security:" >> traceability_report.txt
+          echo "--------" >> traceability_report.txt
+          echo "Trivy Image Scan: Completed (see trivy-image-report artifact / Security tab)" >> traceability_report.txt
+          echo "Cosign Image Signing: Completed (keyless)" >> traceability_report.txt
+          echo "SBOM: Generated for image and attested" >> traceability_report.txt
           echo "" >> traceability_report.txt
-          
+
           echo "Test Summary:" >> traceability_report.txt
           echo "-------------" >> traceability_report.txt
-
           FAILED_COUNT=$(grep -c "Assertion failed" test_results.log 2>/dev/null || echo 0)
           TEST_STATUS="PASS"
-          if [ "$FAILED_COUNT" -ne 0 ]; then
-            TEST_STATUS="FAIL"
-          fi
+          if [ "$FAILED_COUNT" -ne 0 ]; then TEST_STATUS="FAIL"; fi
           echo "Test Status: ${TEST_STATUS}" >> traceability_report.txt
           TEST_COUNT=$(grep -c "Test [0-9]" test_results.log 2>/dev/null || echo 0)
           echo "Test Count: ${TEST_COUNT}" >> traceability_report.txt
           echo "Failed Tests: ${FAILED_COUNT}" >> traceability_report.txt
-          
+          echo "" >> traceability_report.txt
+
           echo "Environment:" >> traceability_report.txt
           echo "------------" >> traceability_report.txt
           echo "Runner OS: $(uname -a)" >> traceability_report.txt
           echo "GCC Version: $(gcc --version | head -n1)" >> traceability_report.txt
 
       - name: Upload traceability report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: traceability-report
