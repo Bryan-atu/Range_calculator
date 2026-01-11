@@ -105,7 +105,6 @@ jobs:
           echo "rekor_entry=${REKOR_ENTRY}" >> $GITHUB_OUTPUT
           echo "Rekor entry: ${REKOR_ENTRY}"
          
-
       - name: Generate traceability report
         run: |
           echo "Traceability report - aviation software build" > traceability_report.txt
