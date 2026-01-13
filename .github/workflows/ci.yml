@@ -224,11 +224,11 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-
+      
           echo "Traceability report - aviation software build" > traceability_report.txt
           echo "=============================================" >> traceability_report.txt
           echo "" >> traceability_report.txt
-
+      
           echo "Build Information:" >> traceability_report.txt
           echo "-----------------" >> traceability_report.txt
           echo "Build Timestamp: $(date -u)" >> traceability_report.txt
@@ -238,21 +238,24 @@ jobs:
           echo "Triggered by: ${{ github.actor }}" >> traceability_report.txt
           echo "Branch/Ref: ${{ github.ref }}" >> traceability_report.txt
           echo "" >> traceability_report.txt
-
+      
           echo "Binary Artifact:" >> traceability_report.txt
           echo "--------------" >> traceability_report.txt
           echo "Executable: range_test" >> traceability_report.txt
           echo "SHA256: $(sha256sum range_test | awk '{print $1}')" >> traceability_report.txt
-          echo "Cosign Signature: range_test.sig" >> traceability_report.txt
-          echo "Cosign Certificate: range_test.pem" >> traceability_report.txt
+          echo "Cosign Bundle: range_test.sigstore.json" >> traceability_report.txt
+          echo "Bundle SHA256: $(sha256sum range_test.sigstore.json | awk '{print $1}')" >> traceability_report.txt
           echo "Rekor Log Entry: ${{ steps.verify_signature.outputs.rekor_entry }}" >> traceability_report.txt
+          if [ -n "${{ steps.verify_signature.outputs.rekor_entry }}" ]; then
+            echo "Rekor URL: https://rekor.sigstore.dev/api/v1/log/entries/${{ steps.verify_signature.outputs.rekor_entry }}" >> traceability_report.txt
+          fi
           echo "" >> traceability_report.txt
-
+      
           echo "Container Image:" >> traceability_report.txt
           echo "---------------" >> traceability_report.txt
           echo "Image: ${IMAGE}" >> traceability_report.txt
           echo "" >> traceability_report.txt
-
+      
           echo "Security:" >> traceability_report.txt
           echo "--------" >> traceability_report.txt
           echo "Trivy Image Scan: Completed (see trivy-image-report artifact / Security tab)" >> traceability_report.txt
@@ -260,7 +263,7 @@ jobs:
           echo "SBOM (source): sbom.spdx.json (attested to binary)" >> traceability_report.txt
           echo "SBOM (image): image.sbom.spdx.json (attested to image)" >> traceability_report.txt
           echo "" >> traceability_report.txt
-
+      
           echo "Test Summary:" >> traceability_report.txt
           echo "-------------" >> traceability_report.txt
           FAILED_COUNT=$(grep -c "Assertion failed" test_results.log 2>/dev/null || echo 0)
@@ -271,7 +274,7 @@ jobs:
           echo "Test Count: ${TEST_COUNT}" >> traceability_report.txt
           echo "Failed Tests: ${FAILED_COUNT}" >> traceability_report.txt
           echo "" >> traceability_report.txt
-
+      
           echo "Environment:" >> traceability_report.txt
           echo "------------" >> traceability_report.txt
           echo "Runner OS: $(uname -a)" >> traceability_report.txt
