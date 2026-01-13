@@ -85,24 +85,30 @@ jobs:
             --predicate sbom.spdx.json \
             --type spdxjson \
             range_test
-      - name: Verify signature using Cosign + check Rekor entry
+
+      - name: Verify signature using Cosign + chcek Rekor entry
         id: verify_signature
+        env:
+          COSIGN_EXPERIMENTAL: "1"
         run: |
           set -euo pipefail
       
           ARTIFACT_SHA256=$(sha256sum range_test | awk '{print $1}')
-          echo "Artifact SHA256: $ARTIFACT_SHA256"
+          echo "artifact_sha256=${ARTIFACT_SHA256}" >> $GITHUB_OUTPUT
       
-          VERIFY_OUT=$(cosign verify-blob range_test \
+          # Verify the blob against the bundle, and pin expected issuer + identity
+          cosign verify-blob range_test \
             --bundle range_test.sigstore.json \
-            --rekor-url=https://rekor.sigstore.dev 2>&1 || true)
-      
-          echo "$VERIFY_OUT"
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
+            --rekor-url "https://rekor.sigstore.dev" \
+            >/dev/null
       
           # Fallback: Search Rekor by hash
           REKOR_ENTRY=$(rekor-cli search --sha "$ARTIFACT_SHA256" --rekor_server https://rekor.sigstore.dev | head -n1 || true)
-      
           echo "rekor_entry=${REKOR_ENTRY}" >> $GITHUB_OUTPUT
+      
+          echo "Artifact SHA256: $ARTIFACT_SHA256"
           echo "Rekor entry: ${REKOR_ENTRY}"
 
       - name: Upload signed build artifacts
@@ -239,16 +245,17 @@ jobs:
           echo "Branch/Ref: ${{ github.ref }}" >> traceability_report.txt
           echo "" >> traceability_report.txt
       
+          ARTIFACT_SHA256=$(sha256sum range_test | awk '{print $1}')
+          
           echo "Binary Artifact:" >> traceability_report.txt
           echo "--------------" >> traceability_report.txt
           echo "Executable: range_test" >> traceability_report.txt
-          echo "SHA256: $(sha256sum range_test | awk '{print $1}')" >> traceability_report.txt
+          echo "SHA256: ${ARTIFACT_SHA256}" >> traceability_report.txt
           echo "Cosign Bundle: range_test.sigstore.json" >> traceability_report.txt
           echo "Bundle SHA256: $(sha256sum range_test.sigstore.json | awk '{print $1}')" >> traceability_report.txt
-          echo "Rekor Log Entry: ${{ steps.verify_signature.outputs.rekor_entry }}" >> traceability_report.txt
-          if [ -n "${{ steps.verify_signature.outputs.rekor_entry }}" ]; then
-            echo "Rekor URL: https://rekor.sigstore.dev/api/v1/log/entries/${{ steps.verify_signature.outputs.rekor_entry }}" >> traceability_report.txt
-          fi
+          echo "Rekor Entry: ${{ steps.verify_signature.outputs.rekor_entry }}" >> traceability_report.txt
+          echo "Sigstore Search (hash): https://search.sigstore.dev/?hash=${ARTIFACT_SHA256}" >> traceability_report.txt
+          echo "Rekor API (entry): https://rekor.sigstore.dev/api/v1/log/entries/${{ steps.verify_signature.outputs.rekor_entry }}" >> traceability_report.txt
           echo "" >> traceability_report.txt
       
           echo "Container Image:" >> traceability_report.txt
