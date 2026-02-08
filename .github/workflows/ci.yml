@@ -3,7 +3,7 @@ name: CI Pipeline for Aviation Software
 on:
   push:
     branches:
-      - main
+      - feat/Range-9
   pull_request:
 
 permissions:
