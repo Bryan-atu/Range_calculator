@@ -7,7 +7,7 @@ on:
   pull_request:
 
 permissions:
-  id-token: write   # needed for control + scenario that signs
+  id-token: write   # required for keyless signing in the control + mismatch scenario
   contents: read
 
 jobs:
@@ -49,7 +49,7 @@ jobs:
           COSIGN_EXPERIMENTAL: "1"
         run: |
           set -euo pipefail
-
+          
           N=10
 
           record() {
@@ -57,7 +57,7 @@ jobs:
             echo "$1,$2,$3,$4,$5,$6" >> identity_enforcement.csv
           }
 
-          # Verify helper (pins expected issuer + repo identity prefix)
+          # Verify helper
           verify_ok() {
             cosign verify-blob "$1" \
               --bundle "$2" \
@@ -67,6 +67,23 @@ jobs:
               >/dev/null 2>&1
           }
 
+          # Rekor presence helper
+          rekor_present_for_file() {
+            local file="$1"
+            local sha
+            sha=$(sha256sum "$file" | awk '{print $1}')
+            local entry
+            entry=$(rekor-cli search --sha "$sha" --rekor_server https://rekor.sigstore.dev 2>/dev/null | head -n 1 || true)
+            if [ -n "${entry}" ] && [ "${entry}" != "null" ]; then
+              echo "1"
+            else
+              echo "0"
+            fi
+          }
+
+          # This repo cannot match, so verification must fail if identity enforcement works.
+          BAD_ID_REGEX="^https://github.com/THIS_REPO_DOES_NOT_EXIST/"
+
           for trial in $(seq 1 $N); do
             # -------------------------
             # Scenario A: CONTROL (expected PASS)
@@ -74,25 +91,17 @@ jobs:
             rm -f range_test.sigstore.json
 
             SIGN_OUT=$(cosign sign-blob --yes --bundle range_test.sigstore.json range_test 2>&1 || true)
-            if [ -f range_test.sigstore.json ]; then
-              SIGN_OK=1
-            else
-              SIGN_OK=0
-            fi
+            SIGN_OK=0
+            if [ -f range_test.sigstore.json ]; then SIGN_OK=1; fi
 
+            VER_OK=0
             if [ "$SIGN_OK" -eq 1 ] && verify_ok "range_test" "range_test.sigstore.json"; then
               VER_OK=1
-            else
-              VER_OK=0
             fi
 
-            # Rekor entry present? (search by artifact hash)
-            ART_SHA=$(sha256sum range_test | awk '{print $1}')
-            REKOR_ENTRY=$(rekor-cli search --sha "$ART_SHA" --rekor_server https://rekor.sigstore.dev 2>/dev/null | head -n 1 || true)
-            if [ -n "${REKOR_ENTRY}" ] && [ "${REKOR_ENTRY}" != "null" ]; then
-              REKOR_OK=1
-            else
-              REKOR_OK=0
+            REKOR_OK=0
+            if [ "$SIGN_OK" -eq 1 ]; then
+              REKOR_OK=$(rekor_present_for_file "range_test")
             fi
 
             if [ "$SIGN_OK" -eq 1 ] && [ "$VER_OK" -eq 1 ]; then
@@ -103,8 +112,8 @@ jobs:
             fi
 
             # -------------------------
-            # Scenario B: UNAUTHORISED - no OIDC token (simulate by unsetting CI variables)
-            # This usually forces cosign keyless signing to fail because it cannot obtain an identity token.
+            # Scenario B: UNAUTHORISED - no OIDC token available (expected SIGN FAIL)
+            # Simulate token unavailability by unsetting the GitHub OIDC environment variables.
             # -------------------------
             rm -f unauth.sigstore.json
 
@@ -122,35 +131,42 @@ jobs:
             fi
 
             # -------------------------
-            # Scenario C: UNAUTHORISED - identity constraint mismatch (verification should FAIL)
-            # Sign normally, but enforce a regex that cannot match this workflow identity.
-            # This demonstrates that signatures from non-approved identity contexts are rejected.
+            # Scenario C: UNAUTHORISED - identity constraint mismatch (expected VERIFY FAIL)
+            # Sign normally (trusted environment), then attempt verification under a policy that rejects the identity.
             # -------------------------
             rm -f range_test.sigstore.json
 
-            cosign sign-blob --yes --bundle range_test.sigstore.json range_test >/dev/null 2>&1 || true
+            SIGN_OUT=$(cosign sign-blob --yes --bundle range_test.sigstore.json range_test 2>&1 || true)
+            SIGN_OK=0
+            if [ -f range_test.sigstore.json ]; then SIGN_OK=1; fi
+
+            # If we did sign successfully, Rekor should be present (evidence created),
+            # but the verification policy should block acceptance.
+            REKOR_OK=0
+            if [ "$SIGN_OK" -eq 1 ]; then
+              REKOR_OK=$(rekor_present_for_file "range_test")
+            fi
 
             set +e
             cosign verify-blob range_test \
               --bundle range_test.sigstore.json \
               --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-              --certificate-identity-regexp "^https://github.com/THIS_REPO_DOES_NOT_EXIST/" \
+              --certificate-identity-regexp "${BAD_ID_REGEX}" \
               --rekor-url "https://rekor.sigstore.dev" \
               >/dev/null 2>&1
             VRC=$?
             set -e
 
             if [ $VRC -ne 0 ]; then
-              # signing happened, but acceptance was blocked
-              record "$trial" "identity_mismatch_rejected" "1" "0" "1" "identity_regex_mismatch"
+              record "$trial" "identity_mismatch_rejected" "$SIGN_OK" "0" "$REKOR_OK" "identity_regex_mismatch"
             else
-              record "$trial" "identity_mismatch_rejected" "1" "1" "1" "UNEXPECTED_VERIFY_SUCCESS"
+              record "$trial" "identity_mismatch_rejected" "$SIGN_OK" "1" "$REKOR_OK" "UNEXPECTED_VERIFY_SUCCESS"
             fi
 
           done
 
           echo "Wrote identity_enforcement.csv:"
-          head -n 15 identity_enforcement.csv
+          head -n 20 identity_enforcement.csv
 
       - name: Upload results CSV
         if: always()
