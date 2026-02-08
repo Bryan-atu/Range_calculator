@@ -1,0 +1,136 @@
+name: Evaluation - Tamper Detection (5.2)
+
+on: 
+  push: 
+    branches:
+      - feat/Range-9
+  pull_request:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  tamper-detection:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y gcc make curl
+
+      - name: Compile code
+        run: gcc range_calculator.c test_range_calculator.c -o range_test -Wall -Wextra
+
+      - name: Install Cosign
+        run: |
+          set -euo pipefail
+          curl -LO https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64
+          chmod +x cosign-linux-amd64
+          sudo mv cosign-linux-amd64 /usr/local/bin/cosign
+          cosign version
+
+      - name: Sign executable with cosign (OIDC bundle)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes --bundle range_test.sigstore.json range_test
+
+      - name: Create results CSV
+        run: |
+          echo "trial,tamper_type,verification_result,error_snippet" > tamper_detection.csv
+
+      - name: Control verification (known good)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set +e
+          OUT=$(cosign verify-blob range_test \
+            --bundle range_test.sigstore.json \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
+            --rekor-url "https://rekor.sigstore.dev" 2>&1)
+          RC=$?
+          if [ $RC -eq 0 ]; then
+            echo "1,none,pass,OK" >> tamper_detection.csv
+          else
+            ERR=$(echo "$OUT" | head -n 1 | tr ',' ';')
+            echo "1,none,fail,$ERR" >> tamper_detection.csv
+            exit 1
+          fi
+
+      - name: Tamper 1 - binary modification (expect FAIL)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cp range_test range_test.tampered
+          echo "X" >> range_test.tampered
+
+          set +e
+          OUT=$(cosign verify-blob range_test.tampered \
+            --bundle range_test.sigstore.json \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
+            --rekor-url "https://rekor.sigstore.dev" 2>&1)
+          RC=$?
+          if [ $RC -ne 0 ]; then
+            ERR=$(echo "$OUT" | head -n 1 | tr ',' ';')
+            echo "1,binary_modification,fail,$ERR" >> tamper_detection.csv
+          else
+            echo "1,binary_modification,pass,UNEXPECTED_PASS" >> tamper_detection.csv
+          fi
+
+      - name: Tamper 2 - bundle missing (expect FAIL)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          mv range_test.sigstore.json range_test.sigstore.json.bak
+
+          set +e
+          OUT=$(cosign verify-blob range_test \
+            --bundle range_test.sigstore.json \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
+            --rekor-url "https://rekor.sigstore.dev" 2>&1)
+          RC=$?
+          if [ $RC -ne 0 ]; then
+            ERR=$(echo "$OUT" | head -n 1 | tr ',' ';')
+            echo "1,bundle_missing,fail,$ERR" >> tamper_detection.csv
+          else
+            echo "1,bundle_missing,pass,UNEXPECTED_PASS" >> tamper_detection.csv
+          fi
+
+          mv range_test.sigstore.json.bak range_test.sigstore.json
+
+      - name: Tamper 3 - wrong bundle substitution (expect FAIL)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          # Create a second bundle by signing a different blob (simple, reproducible mismatch)
+          echo "dummy" > other_blob.txt
+          cosign sign-blob --yes --bundle other_blob.sigstore.json other_blob.txt
+
+          cp other_blob.sigstore.json range_test.sigstore.json.bad
+
+          set +e
+          OUT=$(cosign verify-blob range_test \
+            --bundle range_test.sigstore.json.bad \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
+            --rekor-url "https://rekor.sigstore.dev" 2>&1)
+          RC=$?
+          if [ $RC -ne 0 ]; then
+            ERR=$(echo "$OUT" | head -n 1 | tr ',' ';')
+            echo "1,bundle_substitution,fail,$ERR" >> tamper_detection.csv
+          else
+            echo "1,bundle_substitution,pass,UNEXPECTED_PASS" >> tamper_detection.csv
+          fi
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: tamper-detection-results
+          path: tamper_detection.csv
