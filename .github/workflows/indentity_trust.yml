@@ -1,0 +1,160 @@
+name: Evaluation - Identity & Trust Enforcement (5.3.3)
+
+on:
+  push:
+    branches:
+      - feat/Range-9
+  pull_request:
+
+permissions:
+  id-token: write   # needed for control + scenario that signs
+  contents: read
+
+jobs:
+  identity-enforcement:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y gcc make curl
+
+      - name: Compile code
+        run: gcc range_calculator.c test_range_calculator.c -o range_test -Wall -Wextra
+
+      - name: Install Cosign
+        run: |
+          set -euo pipefail
+          curl -LO https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64
+          chmod +x cosign-linux-amd64
+          sudo mv cosign-linux-amd64 /usr/local/bin/cosign
+          cosign version
+
+      - name: Install rekor-cli
+        run: |
+          set -euo pipefail
+          curl -sSfL https://github.com/sigstore/rekor/releases/latest/download/rekor-cli-linux-amd64 -o rekor-cli
+          chmod +x rekor-cli
+          sudo mv rekor-cli /usr/local/bin/rekor-cli
+          rekor-cli version
+
+      - name: Create results CSV
+        run: |
+          echo "trial,scenario,signing_success,verification_success,rekor_entry_present,failure_reason" > identity_enforcement.csv
+
+      - name: Run identity enforcement trials (control + unauthorised cases)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+
+          N=10
+
+          record() {
+            # trial,scenario,signing_success,verification_success,rekor_entry_present,failure_reason
+            echo "$1,$2,$3,$4,$5,$6" >> identity_enforcement.csv
+          }
+
+          # Verify helper (pins expected issuer + repo identity prefix)
+          verify_ok() {
+            cosign verify-blob "$1" \
+              --bundle "$2" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/" \
+              --rekor-url "https://rekor.sigstore.dev" \
+              >/dev/null 2>&1
+          }
+
+          for trial in $(seq 1 $N); do
+            # -------------------------
+            # Scenario A: CONTROL (expected PASS)
+            # -------------------------
+            rm -f range_test.sigstore.json
+
+            SIGN_OUT=$(cosign sign-blob --yes --bundle range_test.sigstore.json range_test 2>&1 || true)
+            if [ -f range_test.sigstore.json ]; then
+              SIGN_OK=1
+            else
+              SIGN_OK=0
+            fi
+
+            if [ "$SIGN_OK" -eq 1 ] && verify_ok "range_test" "range_test.sigstore.json"; then
+              VER_OK=1
+            else
+              VER_OK=0
+            fi
+
+            # Rekor entry present? (search by artifact hash)
+            ART_SHA=$(sha256sum range_test | awk '{print $1}')
+            REKOR_ENTRY=$(rekor-cli search --sha "$ART_SHA" --rekor_server https://rekor.sigstore.dev 2>/dev/null | head -n 1 || true)
+            if [ -n "${REKOR_ENTRY}" ] && [ "${REKOR_ENTRY}" != "null" ]; then
+              REKOR_OK=1
+            else
+              REKOR_OK=0
+            fi
+
+            if [ "$SIGN_OK" -eq 1 ] && [ "$VER_OK" -eq 1 ]; then
+              record "$trial" "control" "1" "1" "$REKOR_OK" "OK"
+            else
+              ERR=$(echo "$SIGN_OUT" | head -n 1 | tr ',' ';')
+              record "$trial" "control" "$SIGN_OK" "$VER_OK" "$REKOR_OK" "${ERR:-control_failed}"
+            fi
+
+            # -------------------------
+            # Scenario B: UNAUTHORISED - no OIDC token (simulate by unsetting CI variables)
+            # This usually forces cosign keyless signing to fail because it cannot obtain an identity token.
+            # -------------------------
+            rm -f unauth.sigstore.json
+
+            set +e
+            SIGN_OUT=$(env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+              cosign sign-blob --yes --bundle unauth.sigstore.json range_test 2>&1)
+            RC=$?
+            set -e
+
+            if [ $RC -ne 0 ] && [ ! -f unauth.sigstore.json ]; then
+              record "$trial" "no_oidc_token" "0" "0" "0" "$(echo "$SIGN_OUT" | head -n 1 | tr ',' ';')"
+            else
+              # Unexpected: signing succeeded
+              record "$trial" "no_oidc_token" "1" "0" "0" "UNEXPECTED_SIGN_SUCCESS"
+            fi
+
+            # -------------------------
+            # Scenario C: UNAUTHORISED - identity constraint mismatch (verification should FAIL)
+            # Sign normally, but enforce a regex that cannot match this workflow identity.
+            # This demonstrates that signatures from non-approved identity contexts are rejected.
+            # -------------------------
+            rm -f range_test.sigstore.json
+
+            cosign sign-blob --yes --bundle range_test.sigstore.json range_test >/dev/null 2>&1 || true
+
+            set +e
+            cosign verify-blob range_test \
+              --bundle range_test.sigstore.json \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              --certificate-identity-regexp "^https://github.com/THIS_REPO_DOES_NOT_EXIST/" \
+              --rekor-url "https://rekor.sigstore.dev" \
+              >/dev/null 2>&1
+            VRC=$?
+            set -e
+
+            if [ $VRC -ne 0 ]; then
+              # signing happened, but acceptance was blocked
+              record "$trial" "identity_mismatch_rejected" "1" "0" "1" "identity_regex_mismatch"
+            else
+              record "$trial" "identity_mismatch_rejected" "1" "1" "1" "UNEXPECTED_VERIFY_SUCCESS"
+            fi
+
+          done
+
+          echo "Wrote identity_enforcement.csv:"
+          head -n 15 identity_enforcement.csv
+
+      - name: Upload results CSV
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: identity-enforcement-results
+          path: identity_enforcement.csv
