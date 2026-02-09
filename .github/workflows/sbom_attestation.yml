@@ -1,4 +1,4 @@
-name: Evaluation - SBOM Attestation Integrity (5.2.5)
+name: Evaluation - SBOM attestation integrity (5.2.5)
 
 on:
   push:
@@ -47,7 +47,16 @@ jobs:
           format: spdx-json
           output-file: sbom.spdx.json
 
-      - name: Create SBOM attestation (predicate -> range_test)
+      # sign the blob so we have a complete chain (not strictly required for attestation)
+      - name: Sign executable with cosign (OIDC bundle)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes --bundle range_test.sigstore.json range_test
+
+      # Create an explicit/downloadable bundle for the attestation itself
+      - name: Create SBOM attestation bundle (predicate -> range_test)
         env:
           COSIGN_EXPERIMENTAL: "1"
         run: |
@@ -55,13 +64,14 @@ jobs:
           cosign attest-blob --yes \
             --predicate sbom.spdx.json \
             --type spdxjson \
+            --bundle sbom_attestation.sigstore.json \
             range_test
 
       - name: Create results CSV
         run: |
-          echo "trial,verify_success,rekor_present,latency_ms,rekor_uuid,error_snippet" > sbom_attestation_metrics.csv
+          echo "run,attestation_verified,rekor_entry_present,verification_latency_ms,rekor_uuid,failure_reason" > sbom_attestation_metrics.csv
 
-      - name: Run attestation verification trials (latency + Rekor)
+      - name: Run attestation verification trials (N runs)
         env:
           COSIGN_EXPERIMENTAL: "1"
         run: |
@@ -70,34 +80,26 @@ jobs:
           N=20
 
           verify_attestation() {
-            # Verify attestation (keyless policy pinned)
-            cosign verify-attestation-blob "$1" \
+            # Verify the blob attestation against the attestation bundle (keyless mode)
+            cosign verify-blob-attestation "$1" \
+              --bundle "$2" \
               --type "spdxjson" \
               --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
               --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/" \
               --rekor-url "https://rekor.sigstore.dev"
           }
 
-          for trial in $(seq 1 $N); do
+          for run in $(seq 1 $N); do
             start=$(date +%s%3N)
 
             set +e
-            OUT=$(verify_attestation "range_test" 2>&1)
+            OUT=$(verify_attestation "range_test" "sbom_attestation.sigstore.json" 2>&1)
             RC=$?
             set -e
 
             end=$(date +%s%3N)
             LAT=$((end - start))
 
-            if [ $RC -eq 0 ]; then
-              VS=1
-              ERR="OK"
-            else
-              VS=0
-              ERR=$(echo "$OUT" | head -n 1 | tr ',' ';')
-            fi
-
-            # Rekor presence check: search by artifact hash (best-effort)
             SHA=$(sha256sum range_test | awk '{print $1}')
             REKOR_UUID=$(rekor-cli search --sha "$SHA" --rekor_server https://rekor.sigstore.dev 2>/dev/null | head -n 1 || true)
 
@@ -108,11 +110,16 @@ jobs:
               REKOR_UUID=""
             fi
 
-            echo "${trial},${VS},${RP},${LAT},${REKOR_UUID},${ERR}" >> sbom_attestation_metrics.csv
+            if [ $RC -eq 0 ]; then
+              echo "${run},1,${RP},${LAT},${REKOR_UUID},OK" >> sbom_attestation_metrics.csv
+            else
+              ERR=$(echo "$OUT" | head -n 1 | tr ',' ';')
+              echo "${run},0,${RP},${LAT},${REKOR_UUID},${ERR}" >> sbom_attestation_metrics.csv
+            fi
           done
 
           echo "Preview:"
-          head -n 10 sbom_attestation_metrics.csv
+          head -n 15 sbom_attestation_metrics.csv
 
       - name: Upload results CSV
         if: always()
@@ -121,9 +128,13 @@ jobs:
           name: sbom-attestation-metrics
           path: sbom_attestation_metrics.csv
 
-      - name: Upload SBOM predicate (for audit evidence)
+      - name: Upload attestation and SBOM evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: sbom-predicate
-          path: sbom.spdx.json
+          name: sbom-attestation-evidence
+          path: |
+            range_test
+            range_test.sigstore.json
+            sbom.spdx.json
+            sbom_attestation.sigstore.json
