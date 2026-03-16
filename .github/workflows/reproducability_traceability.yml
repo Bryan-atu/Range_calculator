@@ -238,3 +238,5 @@ jobs:
             range_test.sigstore.json
             sbom.spdx.json
             test_results.log
+
+            
