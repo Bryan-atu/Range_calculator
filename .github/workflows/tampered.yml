@@ -3,7 +3,7 @@ name: Evaluation - Tamper Detection (5.2)
 on:
   push:
     branches:
-      - feat/Range-9
+      - main
   pull_request:
 
 permissions:
