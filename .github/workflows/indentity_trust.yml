@@ -3,7 +3,7 @@ name: Evaluation - Identity & Trust Enforcement (5.3.3)
 on:
   push:
     branches:
-      - feat/Range-9
+      - main
   pull_request:
 
 permissions:
