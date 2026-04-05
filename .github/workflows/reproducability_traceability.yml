@@ -1,0 +1,240 @@
+name: Evaluation - Traceability and Reproducibility (5.2.7 + 5.2.8)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  traceability-reproducibility-eval:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc make curl jq
+
+      - name: Install Cosign
+        run: |
+          set -euo pipefail
+          curl -LO https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64
+          chmod +x cosign-linux-amd64
+          sudo mv cosign-linux-amd64 /usr/local/bin/cosign
+          cosign version
+
+      - name: Install rekor-cli
+        run: |
+          set -euo pipefail
+          curl -sSfL https://github.com/sigstore/rekor/releases/latest/download/rekor-cli-linux-amd64 -o rekor-cli
+          chmod +x rekor-cli
+          sudo mv rekor-cli /usr/local/bin/rekor-cli
+          rekor-cli version
+
+      - name: Compile code
+        run: |
+          gcc range_calculator.c test_range_calculator.c -o range_test -Wall -Wextra
+
+      - name: Run tests
+        run: |
+          ./range_test | tee test_results.log
+
+      - name: Check for test failures
+        run: |
+          if grep -q "Assertion failed" test_results.log; then
+            echo "Test failures detected"
+            exit 1
+          else
+            echo "All tests passed"
+          fi
+
+      - name: Sign executable with cosign (OIDC)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes \
+            --bundle range_test.sigstore.json \
+            range_test
+
+      - name: Generate simple SBOM placeholder
+        run: |
+          set -euo pipefail
+          echo '{"spdxVersion":"SPDX-2.3","SPDXID":"SPDXRef-DOCUMENT","name":"range_test_eval"}' > sbom.spdx.json
+
+      - name: Verify signature and resolve Rekor entry
+        id: verify_signature
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+
+          ARTIFACT_SHA256=$(sha256sum range_test | awk '{print $1}')
+          echo "artifact_sha256=${ARTIFACT_SHA256}" >> $GITHUB_OUTPUT
+
+          cosign verify-blob range_test \
+            --bundle range_test.sigstore.json \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/" \
+            --rekor-url "https://rekor.sigstore.dev" \
+            >/dev/null
+
+          REKOR_ENTRY=$(rekor-cli search --sha "${ARTIFACT_SHA256}" --rekor_server https://rekor.sigstore.dev | head -n1 || true)
+
+          echo "rekor_entry=${REKOR_ENTRY}" >> $GITHUB_OUTPUT
+          echo "Artifact SHA256: ${ARTIFACT_SHA256}"
+          echo "Rekor entry: ${REKOR_ENTRY}"
+
+      - name: Generate traceability report
+        run: |
+          set -euo pipefail
+
+          REPORT="traceability_report.txt"
+          ARTIFACT_SHA256="${{ steps.verify_signature.outputs.artifact_sha256 }}"
+          REKOR_UUID="${{ steps.verify_signature.outputs.rekor_entry }}"
+
+          {
+            echo "Traceability report - aviation software build"
+            echo "============================================="
+            echo ""
+            echo "Build Information:"
+            echo "-----------------"
+            echo "Build Timestamp: $(date -u)"
+            echo "Repository: ${GITHUB_REPOSITORY}"
+            echo "Workflow: ${GITHUB_WORKFLOW}"
+            echo "Commit SHA: ${GITHUB_SHA}"
+            echo "Triggered by: ${GITHUB_ACTOR}"
+            echo "Branch/Ref: ${GITHUB_REF}"
+            echo ""
+            echo "Binary Artifact:"
+            echo "--------------"
+            echo "Executable: range_test"
+            echo "SHA256: ${ARTIFACT_SHA256}"
+            echo "Cosign Bundle: range_test.sigstore.json"
+            echo "Bundle SHA256: $(sha256sum range_test.sigstore.json | awk '{print $1}')"
+            echo "Rekor Entry: ${REKOR_UUID}"
+            echo ""
+            echo "Security:"
+            echo "--------"
+            echo "SBOM (source): sbom.spdx.json"
+            echo ""
+            echo "Test Summary:"
+            echo "-------------"
+            echo "Test Status: PASS"
+            echo "Test Count: $(grep -c "Test [0-9]" test_results.log 2>/dev/null || echo 0)"
+            echo "Failed Tests: $(grep -c "Assertion failed" test_results.log 2>/dev/null || echo 0)"
+            echo ""
+            echo "Environment:"
+            echo "------------"
+            echo "Runner OS: $(uname -a)"
+            echo "GCC Version: $(gcc --version | head -n1)"
+          } > "${REPORT}"
+
+      - name: Generate traceability metrics CSV (single row)
+        run: |
+          set -euo pipefail
+
+          REPORT="traceability_report.txt"
+          ARTIFACT_SHA256="${{ steps.verify_signature.outputs.artifact_sha256 }}"
+          REKOR_UUID="${{ steps.verify_signature.outputs.rekor_entry }}"
+          RUN_ID="${GITHUB_RUN_NUMBER}"
+
+          COMMIT_MATCH=0
+          ARTIFACT_HASH_MATCH=0
+          REKOR_PRESENT=0
+          REKOR_MATCH=0
+          BUNDLE_PRESENT=0
+          SBOM_PRESENT=0
+          WORKFLOW_PRESENT=0
+
+          if grep -q "Commit SHA: ${GITHUB_SHA}" "${REPORT}"; then
+            COMMIT_MATCH=1
+          fi
+
+          if grep -q "SHA256: ${ARTIFACT_SHA256}" "${REPORT}"; then
+            ARTIFACT_HASH_MATCH=1
+          fi
+
+          if [ -n "${REKOR_UUID}" ] && grep -q "Rekor Entry: ${REKOR_UUID}" "${REPORT}"; then
+            REKOR_PRESENT=1
+            REKOR_MATCH=1
+          fi
+
+          if grep -q "Cosign Bundle: range_test.sigstore.json" "${REPORT}" && [ -f range_test.sigstore.json ]; then
+            BUNDLE_PRESENT=1
+          fi
+
+          if grep -q "SBOM (source): sbom.spdx.json" "${REPORT}" && [ -f sbom.spdx.json ]; then
+            SBOM_PRESENT=1
+          fi
+
+          if grep -q "Repository: ${GITHUB_REPOSITORY}" "${REPORT}" && grep -q "Workflow: ${GITHUB_WORKFLOW}" "${REPORT}"; then
+            WORKFLOW_PRESENT=1
+          fi
+
+          VERIFIED_FIELDS=$((COMMIT_MATCH + ARTIFACT_HASH_MATCH + REKOR_PRESENT + REKOR_MATCH + BUNDLE_PRESENT + SBOM_PRESENT + WORKFLOW_PRESENT))
+          TOTAL_FIELDS=7
+
+          ECS=$(awk "BEGIN { printf \"%.3f\", ${VERIFIED_FIELDS}/${TOTAL_FIELDS} }")
+          MCR="${ECS}"
+
+          echo "run,commit_match,artifact_hash_match,rekor_uuid_present,rekor_uuid_match,bundle_present,sbom_present,workflow_metadata_present,ecs,metadata_consistency_rate" > traceability_metrics.csv
+          echo "${RUN_ID},${COMMIT_MATCH},${ARTIFACT_HASH_MATCH},${REKOR_PRESENT},${REKOR_MATCH},${BUNDLE_PRESENT},${SBOM_PRESENT},${WORKFLOW_PRESENT},${ECS},${MCR}" >> traceability_metrics.csv
+
+          cat traceability_metrics.csv
+
+      - name: Generate reproducibility metrics CSV (single row)
+        run: |
+          set -euo pipefail
+
+          RUN_ID="${GITHUB_RUN_NUMBER}"
+          ARTIFACT_SHA256="${{ steps.verify_signature.outputs.artifact_sha256 }}"
+          REKOR_UUID="${{ steps.verify_signature.outputs.rekor_entry }}"
+
+          # These baseline-comparison fields are left blank here and should be resolved after combining multiple runs.
+          # Hash reproducibility across independent executions is determined later on your VM.
+          echo "run,artifact_sha256,hash_match_to_baseline,rekor_uuid,rekor_uuid_match_to_baseline,reproducibility_rate,hash_consistency" > reproducibility_metrics.csv
+          echo "${RUN_ID},${ARTIFACT_SHA256},,${REKOR_UUID},,," >> reproducibility_metrics.csv
+
+          cat reproducibility_metrics.csv
+
+      - name: Upload traceability metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: traceability-metrics-${{ github.run_number }}
+          path: traceability_metrics.csv
+
+      - name: Upload reproducibility metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reproducibility-metrics-${{ github.run_number }}
+          path: reproducibility_metrics.csv
+
+      - name: Upload traceability report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: traceability-report-${{ github.run_number }}
+          path: traceability_report.txt
+
+      - name: Upload signed artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-build-${{ github.run_number }}
+          path: |
+            range_test
+            range_test.sigstore.json
+            sbom.spdx.json
+            test_results.log

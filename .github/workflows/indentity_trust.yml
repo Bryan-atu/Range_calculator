@@ -1,0 +1,189 @@
+name: Evaluation - Identity & Trust Enforcement (5.3.3)
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  identity-enforcement:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y gcc make curl coreutils
+
+      - name: Compile code
+        run: gcc range_calculator.c test_range_calculator.c -o range_test -Wall -Wextra
+
+      - name: Install Cosign
+        run: |
+          set -euo pipefail
+          curl -LO https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64
+          chmod +x cosign-linux-amd64
+          sudo mv cosign-linux-amd64 /usr/local/bin/cosign
+          cosign version
+
+      - name: Install rekor-cli
+        run: |
+          set -euo pipefail
+          curl -sSfL https://github.com/sigstore/rekor/releases/latest/download/rekor-cli-linux-amd64 -o rekor-cli
+          chmod +x rekor-cli
+          sudo mv rekor-cli /usr/local/bin/rekor-cli
+          rekor-cli version
+
+      - name: Create results CSV
+        run: |
+          echo "trial,scenario,signing_success,verification_success,rekor_entry_present,failure_reason" > identity_enforcement.csv
+
+      - name: Run identity enforcement trials (control + unauthorised cases)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+
+          # For identity gating, 5–10 is normally enough. Start with 5 while debugging.
+          N=5
+
+          # Timeouts (seconds) to prevent hanging forever
+          T_SIGN=90
+          T_VERIFY=90
+          T_REKOR=30
+
+          record() {
+            echo "$1,$2,$3,$4,$5,$6" >> identity_enforcement.csv
+          }
+
+          verify_ok() {
+            # Uses Rekor as part of verification (rekor-url), so this is already a strong check.
+            timeout "${T_VERIFY}s" cosign verify-blob "$1" \
+              --bundle "$2" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/" \
+              --rekor-url "https://rekor.sigstore.dev" \
+              >/dev/null 2>&1
+          }
+
+          # Only used for CONTROL scenario to record "rekor_entry_present" as a separate metric.
+          rekor_present_for_file() {
+            local file="$1"
+            local sha
+            sha=$(sha256sum "$file" | awk '{print $1}')
+            local entry
+            entry=$(timeout "${T_REKOR}s" rekor-cli search --sha "$sha" --rekor_server https://rekor.sigstore.dev 2>/dev/null | head -n 1 || true)
+            if [ -n "${entry}" ] && [ "${entry}" != "null" ]; then
+              echo "1"
+            else
+              echo "0"
+            fi
+          }
+
+          BAD_ID_REGEX="^https://github.com/THIS_REPO_DOES_NOT_EXIST/"
+
+          echo "Starting identity enforcement trials: N=${N}"
+          echo "Timeouts: sign=${T_SIGN}s verify=${T_VERIFY}s rekor-search=${T_REKOR}s"
+          echo "Repo: ${GITHUB_REPOSITORY}"
+
+          for trial in $(seq 1 $N); do
+            echo "---- Trial ${trial}/${N} ----"
+
+            # -------------------------
+            # Scenario A: CONTROL (expected PASS)
+            # -------------------------
+            rm -f range_test.sigstore.json
+
+            set +e
+            SIGN_OUT=$(timeout "${T_SIGN}s" cosign sign-blob --yes --bundle range_test.sigstore.json range_test 2>&1)
+            RC=$?
+            set -e
+
+            SIGN_OK=0
+            if [ $RC -eq 0 ] && [ -f range_test.sigstore.json ]; then SIGN_OK=1; fi
+
+            VER_OK=0
+            if [ "$SIGN_OK" -eq 1 ] && verify_ok "range_test" "range_test.sigstore.json"; then
+              VER_OK=1
+            fi
+
+            REKOR_OK=0
+            if [ "$SIGN_OK" -eq 1 ] && [ "$VER_OK" -eq 1 ]; then
+              REKOR_OK=$(rekor_present_for_file "range_test")
+            fi
+
+            if [ "$SIGN_OK" -eq 1 ] && [ "$VER_OK" -eq 1 ]; then
+              record "$trial" "control" "1" "1" "$REKOR_OK" "OK"
+            else
+              ERR=$(echo "$SIGN_OUT" | head -n 1 | tr ',' ';')
+              record "$trial" "control" "$SIGN_OK" "$VER_OK" "$REKOR_OK" "${ERR:-control_failed_or_timeout}"
+            fi
+
+            # -------------------------
+            # Scenario B: UNAUTHORISED - no OIDC token available (expected SIGN FAIL)
+            # -------------------------
+            rm -f unauth.sigstore.json
+
+            set +e
+            SIGN_OUT=$(env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+              timeout "${T_SIGN}s" cosign sign-blob --yes --bundle unauth.sigstore.json range_test 2>&1)
+            RC=$?
+            set -e
+
+            if [ $RC -ne 0 ] && [ ! -f unauth.sigstore.json ]; then
+              record "$trial" "no_oidc_token" "0" "0" "0" "$(echo "$SIGN_OUT" | head -n 1 | tr ',' ';')"
+            else
+              record "$trial" "no_oidc_token" "1" "0" "0" "UNEXPECTED_SIGN_SUCCESS"
+            fi
+
+            # -------------------------
+            # Scenario C: UNAUTHORISED - identity constraint mismatch (expected VERIFY FAIL)
+            # -------------------------
+            rm -f range_test.sigstore.json
+
+            set +e
+            SIGN_OUT=$(timeout "${T_SIGN}s" cosign sign-blob --yes --bundle range_test.sigstore.json range_test 2>&1)
+            SRC=$?
+            set -e
+
+            SIGN_OK=0
+            if [ $SRC -eq 0 ] && [ -f range_test.sigstore.json ]; then SIGN_OK=1; fi
+
+            set +e
+            timeout "${T_VERIFY}s" cosign verify-blob range_test \
+              --bundle range_test.sigstore.json \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              --certificate-identity-regexp "${BAD_ID_REGEX}" \
+              --rekor-url "https://rekor.sigstore.dev" \
+              >/dev/null 2>&1
+            VRC=$?
+            set -e
+
+            if [ "$SIGN_OK" -eq 1 ] && [ $VRC -ne 0 ]; then
+              # Evidence exists (it was signed), but policy blocks acceptance
+              record "$trial" "identity_mismatch_rejected" "1" "0" "1" "identity_regex_mismatch"
+            elif [ "$SIGN_OK" -eq 1 ] && [ $VRC -eq 0 ]; then
+              record "$trial" "identity_mismatch_rejected" "1" "1" "1" "UNEXPECTED_VERIFY_SUCCESS"
+            else
+              ERR=$(echo "$SIGN_OUT" | head -n 1 | tr ',' ';')
+              record "$trial" "identity_mismatch_rejected" "0" "0" "0" "${ERR:-sign_failed_or_timeout}"
+            fi
+
+            echo "Trial ${trial} complete."
+          done
+
+          echo "Completed. Preview CSV:"
+          head -n 30 identity_enforcement.csv
+
+      - name: Upload results CSV
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: identity-enforcement-results
+          path: identity_enforcement.csv

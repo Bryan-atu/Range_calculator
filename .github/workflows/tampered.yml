@@ -1,0 +1,113 @@
+name: Evaluation - Tamper Detection (5.2)
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  tamper-detection:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y gcc make curl
+
+      - name: Compile code
+        run: gcc range_calculator.c test_range_calculator.c -o range_test -Wall -Wextra
+
+      - name: Install Cosign
+        run: |
+          set -euo pipefail
+          curl -LO https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64
+          chmod +x cosign-linux-amd64
+          sudo mv cosign-linux-amd64 /usr/local/bin/cosign
+          cosign version
+
+      - name: Install rekor-cli
+        run: |
+          set -euo pipefail
+          curl -sSfL https://github.com/sigstore/rekor/releases/latest/download/rekor-cli-linux-amd64 -o rekor-cli
+          chmod +x rekor-cli
+          sudo mv rekor-cli /usr/local/bin/rekor-cli
+          rekor-cli version
+
+      - name: Sign executable with cosign (OIDC bundle)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes --bundle range_test.sigstore.json range_test
+
+      - name: Run tamper detection trials and write CSV
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+
+          N=10
+          echo "trial,tamper_type,verification_result,error_snippet" > tamper_detection.csv
+
+          verify() {
+            cosign verify-blob "$1" \
+              --bundle "$2" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/" \
+              --rekor-url "https://rekor.sigstore.dev"
+          }
+
+          for trial in $(seq 1 $N); do
+            # Control: known-good (expect PASS)
+            if verify "range_test" "range_test.sigstore.json" >/dev/null 2>&1; then
+              echo "${trial},none,pass,OK" >> tamper_detection.csv
+            else
+              echo "${trial},none,fail,control_failed" >> tamper_detection.csv
+            fi
+
+            # Tamper 1: binary modification (expect FAIL)
+            cp range_test range_test.tampered
+            echo "X" >> range_test.tampered
+            if verify "range_test.tampered" "range_test.sigstore.json" >/dev/null 2>&1; then
+              echo "${trial},binary_modification,pass,UNEXPECTED_PASS" >> tamper_detection.csv
+            else
+              echo "${trial},binary_modification,fail,signature_mismatch" >> tamper_detection.csv
+            fi
+            rm -f range_test.tampered
+
+            # Tamper 2: bundle missing (expect FAIL)
+            mv range_test.sigstore.json range_test.sigstore.json.bak
+            if verify "range_test" "range_test.sigstore.json" >/dev/null 2>&1; then
+              echo "${trial},bundle_missing,pass,UNEXPECTED_PASS" >> tamper_detection.csv
+            else
+              echo "${trial},bundle_missing,fail,bundle_missing" >> tamper_detection.csv
+            fi
+            mv range_test.sigstore.json.bak range_test.sigstore.json
+
+            # Tamper 3: wrong bundle substitution (expect FAIL)
+            echo "dummy" > other_blob.txt
+            cosign sign-blob --yes --bundle other_blob.sigstore.json other_blob.txt >/dev/null 2>&1
+            if verify "range_test" "other_blob.sigstore.json" >/dev/null 2>&1; then
+              echo "${trial},bundle_substitution,pass,UNEXPECTED_PASS" >> tamper_detection.csv
+            else
+              echo "${trial},bundle_substitution,fail,bundle_mismatch" >> tamper_detection.csv
+            fi
+            rm -f other_blob.txt other_blob.sigstore.json
+          done
+
+          echo "Wrote tamper_detection.csv:"
+          tail -n +1 tamper_detection.csv | head -n 15
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tamper-detection-results
+          path: tamper_detection.csv
