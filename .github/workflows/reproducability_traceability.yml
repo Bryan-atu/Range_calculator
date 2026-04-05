@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - feat/Range-9
+      - main
   pull_request:
 
 permissions:
