@@ -3,7 +3,7 @@ name: Evaluation - SBOM attestation integrity (5.2.5)
 on:
   push:
     branches:
-      - feat/Range-9
+      - main
   pull_request:
 
 permissions:
