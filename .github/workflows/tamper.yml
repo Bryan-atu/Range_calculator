@@ -1,0 +1,57 @@
+name: Evaluation - Tamper Detection (intentional fail for demo purposes)
+
+on:
+  push:
+    branches:
+      - feat/Range-23
+  pull_request:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  tamper-detection:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y gcc make curl
+
+      - name: Compile code
+        run: gcc range_calculator.c test_range_calculator.c -o range_test -Wall -Wextra
+
+      - name: Install Cosign
+        run: |
+          set -euo pipefail
+          curl -LO https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64
+          chmod +x cosign-linux-amd64
+          sudo mv cosign-linux-amd64 /usr/local/bin/cosign
+          cosign version
+
+      - name: Sign executable with Cosign
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes --bundle range_test.sigstore.json range_test
+
+      - name: Intentionally tamper with signed binary
+        run: |
+          set -euo pipefail
+          echo "X" >> range_test
+          echo "Binary intentionally modified after signing."
+
+      - name: Verify binary has not been tampered with
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+
+          cosign verify-blob range_test \
+            --bundle range_test.sigstore.json \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/"
