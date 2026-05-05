@@ -3,7 +3,7 @@ name: Evaluation - Tamper Detection (intentional fail for demo purposes)
 on:
   push:
     branches:
-      - feat/Range-23
+      - main
   pull_request:
 
 permissions:
