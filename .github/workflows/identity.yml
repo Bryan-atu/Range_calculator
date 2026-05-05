@@ -1,0 +1,61 @@
+name: Identity Enforcement Failure
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  identity-demo:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y gcc curl
+
+      - name: Compile code
+        run: gcc range_calculator.c test_range_calculator.c -o range_test -Wall -Wextra
+
+      - name: Install Cosign
+        run: |
+          set -euo pipefail
+          curl -LO https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64
+          chmod +x cosign-linux-amd64
+          sudo mv cosign-linux-amd64 /usr/local/bin/cosign
+          cosign version
+
+      - name: Sign executable with correct GitHub OIDC identity
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes \
+            --bundle range_test.sigstore.json \
+            range_test
+
+      - name: Control verification with correct identity should pass
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          cosign verify-blob range_test \
+            --bundle range_test.sigstore.json \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/" \
+            --rekor-url "https://rekor.sigstore.dev"
+
+      - name: Identity mismatch verification (expect FAIL)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          cosign verify-blob range_test \
+            --bundle range_test.sigstore.json \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-identity-regexp "^https://github.com/invalid-owner/invalid-repo/" \
+            --rekor-url "https://rekor.sigstore.dev"
